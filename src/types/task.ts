@@ -1,6 +1,10 @@
-export type Task = {
+export interface Task {
   id: string;
-  name: string;
-  done?: boolean;
-  count?: number;
-};
+  nome: string;
+  data_termino: string;
+  concluida: boolean;
+  vezes_adiada: number;
+  desistiu: boolean;
+  desculpa: string;
+  criada_em: string;
+}
