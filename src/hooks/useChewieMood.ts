@@ -1,51 +1,84 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { moods } from "../data/moods";
 import {
-  fetchCat,
-  createNotificationStream,
-  type CatState,
-  type Notification,
-} from "../api/backend";
+  goodFeedNews,
+  pickRandomBadNews,
+  pickRandomMusicSuggestion,
+} from "../data/breakingNews";
 
-const MOOD_EMOJI: Record<CatState["mood"], string> = {
-  happy: "😸",
-  neutral: "🐱",
-  grumpy: "😾",
-  monster: "👹",
-};
+const NEWS_TIMEOUT_MS = 3500;
+
+export type FeedType = "good" | "bad";
+
+type NewsItem = { text: string };
 
 export function useChewieMood() {
-  const [cat, setCat] = useState<CatState | null>(null);
-  const [notifications, setNotifications] = useState<Notification[]>([]);
-  const sourceRef = useRef<EventSource | null>(null);
+  const [moodIdx, setMoodIdx] = useState(0);
+  const [newsItem, setNewsItem] = useState<NewsItem | null>(null);
+  const [goodFeedCount, setGoodFeedCount] = useState(0);
+  const [badFeedCount, setBadFeedCount] = useState(0);
 
-  const refreshCat = useCallback(async () => {
-    try {
-      const data = await fetchCat();
-      setCat(data);
-    } catch (e) {
-      console.error(e);
+  useEffect(() => {
+    if (!newsItem) return;
+    const timer = setTimeout(() => setNewsItem(null), NEWS_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [newsItem]);
+
+  const nextMood = useCallback(() => {
+    setMoodIdx((i) => (i + 1) % moods.length);
+  }, []);
+
+  const prevMood = useCallback(() => {
+    setMoodIdx((i) => (i - 1 + moods.length) % moods.length);
+  }, []);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const target = e.target;
+      if (target instanceof HTMLElement) {
+        const tag = target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable) {
+          return;
+        }
+      }
+      if (e.key === "ArrowLeft") prevMood();
+      else if (e.key === "ArrowRight") nextMood();
     }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [prevMood, nextMood]);
+
+  const selectMood = useCallback((i: number) => {
+    setMoodIdx(i);
   }, []);
 
-  // initial fetch
-  useEffect(() => {
-    refreshCat();
-  }, [refreshCat]);
-
-  // SSE stream
-  useEffect(() => {
-    const source = createNotificationStream((n) => {
-      setNotifications((prev) => [n, ...prev]);
-    });
-    sourceRef.current = source;
-    return () => source.close();
+  const feedChewie = useCallback((type: FeedType) => {
+    if (type === "good") {
+      setGoodFeedCount((n) => n + 1);
+      setMoodIdx(0);
+      setNewsItem({ text: goodFeedNews });
+      return;
+    }
+    setBadFeedCount((n) => n + 1);
+    setMoodIdx(1 + Math.floor(Math.random() * (moods.length - 1)));
+    setNewsItem({ text: pickRandomBadNews() });
   }, []);
 
-  const dismissNotification = useCallback((id: string) => {
-    setNotifications((prev) => prev.filter((n) => n.id !== id));
+  const suggestMusic = useCallback(() => {
+    setNewsItem({ text: pickRandomMusicSuggestion() });
   }, []);
 
-  const moodEmoji = cat ? MOOD_EMOJI[cat.mood] : "🐱";
-
-  return { cat, moodEmoji, notifications, refreshCat, dismissNotification };
+  return {
+    mood: moods[moodIdx],
+    moodIdx,
+    moods,
+    news: newsItem?.text ?? null,
+    goodFeedCount,
+    badFeedCount,
+    nextMood,
+    prevMood,
+    selectMood,
+    feedChewie,
+    suggestMusic,
+  };
 }
