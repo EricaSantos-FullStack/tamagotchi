@@ -30,8 +30,11 @@ export function useTasks() {
     setTasks((prev) => prev.filter((t) => t.done));
   }, []);
 
+  const pendingCount = tasks.reduce((n, t) => (t.done ? n : n + 1), 0);
+
   return {
     tasks,
+    pendingCount,
     addTask,
     postponeTask,
     removeTask,
