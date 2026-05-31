@@ -1,13 +1,8 @@
-:root {
-  font-family: "Space Grotesk", system-ui, sans-serif;
-  font-size: 16px;
-  line-height: 1.45;
-  letter-spacing: 0.18px;
-  color-scheme: dark;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+/* Reset mínimo — estilos globais do app vivem em App.tsx */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
 }
 
 body {
@@ -16,8 +11,4 @@ body {
 
 #root {
   min-height: 100vh;
-}
-
-button {
-  font-family: inherit;
 }

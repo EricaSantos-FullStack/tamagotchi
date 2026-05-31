@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# variáveis de ambiente (nunca commitar a chave real)
+.env
+.env.local
+# .env.example deve ser commitado (contém só exemplo)
