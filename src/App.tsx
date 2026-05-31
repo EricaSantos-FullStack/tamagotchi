@@ -1,49 +1,39 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { CHEWIE_IMGS } from "./assets/images";
 import { SpotifyCard, PLAY_MUSIC_EVENT } from "./components/SpotifyCard";
-import { fetchProcrastinationNudge } from "./api/ai";
+import {
+  listTasks,
+  createTask,
+  patchTask,
+  getCat,
+  listNotifications,
+  openNotificationStream,
+  addDaysIso,
+  type BackendTask,
+  type CatState,
+  type CatMood,
+} from "./api/backend";
 
 /* ═══════════════════════════════════════════════════════
    TIPOS
 ═══════════════════════════════════════════════════════ */
-interface Task {
-  id: number;
-  text: string;
-  done: boolean;
-  defers: number;
-  startAt?: string;   // ISO datetime string
-  endAt?: string;     // ISO datetime string
-  eaten?: boolean;    // comida pelo Chewie ao estourar o prazo
-}
-
-interface Bars {
-  commits: number;
-  procrast: number;
-  humor: number;
-}
+type Task = BackendTask;
 
 interface MoodData {
-  key: string;
+  key: CatMood;
   img: string;
+  emoji: string;
   label: string;
   accent: string;
-  speech: string;
   author: string;
   badge: { text: string; danger: boolean };
   bgGrad: string;
   glitch?: boolean;
 }
 
-interface ChaosModalProps {
-  taskText: string;
-  onConfirm: () => void;
-  onCancel: () => void;
-}
-
 interface TvScreenProps {
   mood: MoodData;
   animShake: boolean;
-  lives: number;
 }
 
 interface BarRowProps {
@@ -54,24 +44,19 @@ interface BarRowProps {
   textColor: string;
 }
 
-interface LivesDisplayProps {
-  lives: number;
-  maxLives: number;
-}
-
 interface PetCardProps {
   mood: MoodData;
-  bars: Bars;
+  cat: CatState | null;
   animShake: boolean;
-  lives: number;
 }
 
 interface TaskCardProps {
   tasks: Task[];
-  setTasks: React.Dispatch<React.SetStateAction<Task[]>>;
-  onComplete: (id?: number) => void;
-  onRequestDefer: (id: number, text: string) => void;
-  onAbandon: () => void;
+  pending: number;
+  onCreate: (nome: string, dataTermino: string) => Promise<void>;
+  onComplete: (id: string) => void;
+  onDefer: (task: Task) => void;
+  onAbandon: (id: string) => void;
 }
 
 interface DeferredTableProps {
@@ -79,12 +64,12 @@ interface DeferredTableProps {
 }
 
 interface WarnCardProps {
-  moodKey: string;
-  lives: number;
+  moodKey: CatMood;
 }
 
 interface BreakingNewsProps {
   message: string;
+  danger: boolean;
   onClose: () => void;
 }
 
@@ -92,25 +77,10 @@ interface BackgroundProps {
   mood: MoodData;
 }
 
-interface AiNudgeProps {
+interface ExcuseBubbleProps {
   message: string;
   loading: boolean;
   onClose: () => void;
-}
-
-interface DeathScreenProps {
-  onRevive: () => void;
-}
-
-interface DeadlineAlertProps {
-  task: Task;
-  onClose: () => void;
-}
-
-interface RecycleBinProps {
-  tasks: Task[];
-  onRestore: (id: number) => void;
-  onCompleteEaten: (id: number) => void;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -191,54 +161,13 @@ const GLOBAL_CSS = `
     70%  { clip-path: inset(40% 0 55% 0); transform: translate(2px, 0);  }
     100% { clip-path: inset(0 0 0 0);     transform: translate(0, 0);    }
   }
-  @keyframes modalIn {
-    from { opacity: 0; transform: scale(0.88) translateY(20px); }
-    to   { opacity: 1; transform: scale(1) translateY(0); }
-  }
-  @keyframes overlayIn {
-    from { opacity: 0; }
-    to   { opacity: 1; }
-  }
   @keyframes nudgeIn {
     from { opacity: 0; transform: translateY(20px) scale(0.95); }
     to   { opacity: 1; transform: none; }
   }
-  @keyframes heartLose {
-    0%   { transform: scale(1); }
-    30%  { transform: scale(1.5); filter: brightness(2); }
-    60%  { transform: scale(0.6); opacity: 0.3; }
-    100% { transform: scale(1); opacity: 1; }
-  }
-  @keyframes heartGain {
-    0%   { transform: scale(0.5); opacity: 0; }
-    60%  { transform: scale(1.3); }
-    100% { transform: scale(1); opacity: 1; }
-  }
-  @keyframes deathIn {
-    from { opacity: 0; }
-    to   { opacity: 1; }
-  }
-  @keyframes deathText {
-    0%   { opacity: 0; transform: scale(0.7) translateY(30px); }
-    60%  { transform: scale(1.05) translateY(-4px); }
-    100% { opacity: 1; transform: scale(1) translateY(0); }
-  }
-  @keyframes reviveBtn {
-    0%, 100% { box-shadow: 0 0 20px rgba(31,255,168,0.4); }
-    50%       { box-shadow: 0 0 40px rgba(31,255,168,0.9), 0 0 80px rgba(31,255,168,0.3); }
-  }
-
   @keyframes deadlineIn {
     from { opacity: 0; transform: translateX(-120px); }
     to   { opacity: 1; transform: none; }
-  }
-  @keyframes progressBar {
-    from { width: 100%; }
-  }
-  @keyframes eatTask {
-    0%   { transform: scale(1) rotate(0deg); opacity: 1; }
-    40%  { transform: scale(1.15) rotate(-3deg); opacity: 1; }
-    100% { transform: scale(0) rotate(20deg); opacity: 0; }
   }
 
   @media (max-width: 800px) {
@@ -251,126 +180,56 @@ const GLOBAL_CSS = `
 `;
 
 /* ═══════════════════════════════════════════════════════
-   CONSTANTES DE JOGO
+   LÓGICA DE HUMOR — derivada 100% do estado do gato (backend)
 ═══════════════════════════════════════════════════════ */
-const MAX_LIVES = 7;
-
-// perde vida: desistir de tarefa, adiar 5+ vezes a mesma tarefa, procrastinação ≥ 90
-// ganha vida: concluir 3 tarefas seguidas (combo) — escolhido por ser orgânico e positivo
-const LIFE_LOSS_EVENTS = {
-  abandon: {
-    lives: -1,
-    msgs: [
-      "Você desistiu de uma tarefa. Chewie perdeu uma vida e arquivou o episódio nos anais da preguiça. 💔",
-      "Tarefa abandonada com sucesso! Chewie perdeu uma vida. O commit pode esperar mais uma eternidade. 💔",
-      "Desistência registrada. Chewie perdeu uma vida. Pelo menos você foi consistente no fracasso. 💔",
-      "Chewie perdeu uma vida. Em compensação, você ganhou tempo livre que certamente vai usar bem. Certamente. 💔",
-      "Missão abortada. Chewie perdeu uma vida. A tarefa foi para o cemitério do backlog, descanse em paz. 💔",
-    ],
-  },
-  deferSpree: {
-    lives: -1,
-    msgs: [
-      "Essa tarefa já foi adiada 5 vezes. Chewie perdeu uma vida. Ela tem mais deferrals do que commits no seu repo. 💔",
-      "5 adiamentos na mesma tarefa. Chewie perdeu uma vida. Parabéns, você criou uma tarefa imortal. 💔",
-      "Chewie perdeu uma vida. Essa tarefa foi adiada tantas vezes que já tem saudade de quando era urgente. 💔",
-      "Recorde pessoal: 5 adiamentos. Chewie perdeu uma vida. A tarefa agora faz parte da família. 💔",
-      "Chewie perdeu uma vida. Ao ritmo que vai, essa tarefa vai ser concluída pela geração seguinte. 💔",
-    ],
-  },
-  procrastPeak: {
-    lives: -1,
-    msgs: [
-      "Procrastinação em 90%. Chewie perdeu uma vida. Tecnicamente você está trabalhando — em evitar trabalho. 💔",
-      "Nível crítico de procrastinação atingido. Chewie perdeu uma vida. É quase uma habilidade, na verdade. 💔",
-      "90% de procrastinação. Chewie perdeu uma vida. Você transformou a inação em arte contemporânea. 💔",
-      "Chewie perdeu uma vida. Com esse nível de procrastinação, você devia estar recebendo por isso. 💔",
-      "Alerta máximo de procrastinação. Chewie perdeu uma vida. O burnout agradece o descanso preventivo. 💔",
-    ],
-  },
-};
-const LIFE_GAIN_EVENTS = {
-  combo3: {
-    lives: 1,
-    msgs: [
-      "3 tarefas seguidas! Chewie ganhou uma vida. Isso foi tão inesperado que ele ficou confuso. 💚",
-      "Combo x3! Chewie ganhou uma vida. Por favor, não acostume — a procrastinação tem sentimentos. 💚",
-      "Chewie ganhou uma vida! Você concluiu 3 tarefas seguidas. Procure um médico, isso não é normal. 💚",
-      "3 de uma vez! Chewie ganhou uma vida. O Gemini Procrastinus está em choque. 💚",
-      "Vida recuperada! Chewie agradece. Mas não exagera, tá? Produtividade demais faz mal. 💚",
-    ],
-  },
-};
-
-function pickRandom<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
-
-/* ═══════════════════════════════════════════════════════
-   LÓGICA DE HUMOR
-═══════════════════════════════════════════════════════ */
-function getMoodData(commits: number, procrast: number, humor: number): MoodData {
-  if (procrast >= 95 && commits <= 10) return {
-    key: "tamagotchi_quebrado",
-    img: "tamagotchi_quebrado",
-    label: "SYSTEM ERROR 💀",
-    accent: "#ff3d6b",
-    speech: '"VOCÊ QUEBROU O TAMAGOTCHI. PARABÉNS."',
-    author: "— Chewie, em erro fatal",
-    badge: { text: "GAME OVER", danger: true },
-    bgGrad: "radial-gradient(900px at 70% -10%, #4a0010 0%, transparent 60%)",
-    glitch: true,
-  };
-  if (procrast >= 80 || (humor <= 15 && commits <= 20)) return {
-    key: "fora_de_controle",
-    img: "fora_de_controle",
-    label: "MODO FLERKEN TOTAL 🐙",
-    accent: "#e040fb",
-    speech: '"TENTÁCULOS LIBERADOS. Seu README agora é meu. 💀"',
-    author: "— Chewie, flerken em fúria interdimensional",
-    badge: { text: "🐙 CAOS", danger: true },
-    bgGrad: "radial-gradient(900px at 70% -10%, #4a0f55 0%, transparent 60%)",
-  };
-  if (procrast >= 65 || humor <= 30) return {
-    key: "irritado",
-    img: "irritado",
-    label: "CHEWIE ESTÁ IRRITADO 😾",
-    accent: "#ff3d6b",
-    speech: '"VOCÊ ADIOU DE NOVO?! O próximo commit eu apago. 🔪"',
-    author: "— Chewie, rosnando muito",
-    badge: { text: "COMMIT JÁ!", danger: true },
-    bgGrad: "radial-gradient(900px at 70% -10%, #5a0820 0%, transparent 60%)",
-  };
-  if (procrast >= 45 || humor <= 55) return {
-    key: "ficando_bravo",
-    img: "ficando_bravo",
-    label: "ficando bravo... 😠",
-    accent: "#ff7c3d",
-    speech: '"Eu estou de olho em você. Uma tarefa a mais adiada e eu ajo."',
-    author: "— Chewie, com a paciência no limite",
-    badge: { text: "CUIDADO!", danger: false },
-    bgGrad: "radial-gradient(900px at 70% -10%, #5a2810 0%, transparent 60%)",
-  };
-  if (humor >= 80 && commits >= 70) return {
-    key: "happy",
-    img: "happy",
-    label: "Chewie está FELIZ! 😻💕",
-    accent: "#1fffa8",
-    speech: '"Você está indo muito bem! Continue assim! 💕"',
-    author: "— Chewie, purring intensely",
-    badge: { text: "MVP!", danger: false },
-    bgGrad: "radial-gradient(900px at 70% -10%, #0a3a28 0%, transparent 60%)",
-  };
-  return {
-    key: "calmo",
-    img: "calmo",
-    label: "procrastinando tranquilamente 🙃",
-    accent: "#9b50ff",
-    speech: '"Você tem 3 tarefas urgentes. Estou ignorando todas com maestria."',
-    author: "— Chewie, flerken da espécie procrastinus",
-    badge: { text: "GIT COMMIT", danger: false },
-    bgGrad: "radial-gradient(900px at 70% -10%, #3a1566 0%, transparent 60%)",
-  };
+function getMoodData(mood: CatMood): MoodData {
+  switch (mood) {
+    case "happy":
+      return {
+        key: "happy",
+        img: "happy",
+        emoji: "😸",
+        label: "Chewie está RADIANTE! 😸",
+        accent: "#1fffa8",
+        author: "— Chewie, fazendo biscoitinhos",
+        badge: { text: "MVP!", danger: false },
+        bgGrad: "radial-gradient(900px at 70% -10%, #0a3a28 0%, transparent 60%)",
+      };
+    case "neutral":
+      return {
+        key: "neutral",
+        img: "calmo",
+        emoji: "🐱",
+        label: "Chewie está NEUTRO 🐱",
+        accent: "#9b50ff",
+        author: "— Chewie, com olhos semicerrados de julgamento",
+        badge: { text: "OK", danger: false },
+        bgGrad: "radial-gradient(900px at 70% -10%, #3a1566 0%, transparent 60%)",
+      };
+    case "grumpy":
+      return {
+        key: "grumpy",
+        img: "irritado",
+        emoji: "😾",
+        label: "Chewie está MAL-HUMORADO 😾",
+        accent: "#ff7c3d",
+        author: "— Chewie, derrubando sua caneca de café",
+        badge: { text: "CUIDADO!", danger: true },
+        bgGrad: "radial-gradient(900px at 70% -10%, #5a2810 0%, transparent 60%)",
+      };
+    case "monster":
+      return {
+        key: "monster",
+        img: "fora_de_controle",
+        emoji: "👹",
+        label: "CHEWIE VIROU UM MONSTRO 👹",
+        accent: "#e040fb",
+        author: "— Chewie, destruindo seu workspace",
+        badge: { text: "🐙 CAOS", danger: true },
+        bgGrad: "radial-gradient(900px at 70% -10%, #4a0f55 0%, transparent 60%)",
+        glitch: true,
+      };
+  }
 }
 
 function clamp(v: number, min = 0, max = 100): number {
@@ -378,72 +237,16 @@ function clamp(v: number, min = 0, max = 100): number {
 }
 
 /* ═══════════════════════════════════════════════════════
-   DADOS ESTÁTICOS
+   HELPERS DE DATA
 ═══════════════════════════════════════════════════════ */
-const NEWS_POOL = [
-  "Tarefa adiada. Chewie anotou. O README vai ficar por enquanto com aquela seção TODO vazia mesmo. 🗒️",
-  "Mais um adiamento registrado. Chewie já está preparando o discurso de 'eu ia fazer mas...' pra você. 🎤",
-  "Adiado com maestria. A tarefa agora mora no limbo entre 'vou fazer amanhã' e 'o que era isso mesmo?'. 🌫️",
-  "Adiamento confirmado. Chewie acrescentou mais uma camada ao seu portfólio de intenções não cumpridas. 🖼️",
-  "Mais um dia, mais um adiamento. Chewie está orgulhoso — do jeito errado. 😾",
-  "Tarefa sobreviveu mais um dia sem ser feita. Chewie está registrando no changelog do caos. 📋",
-  "Adiado. A tarefa tentou um pull request, mas você deu reject sem revisar. Clássico. 🔄",
-  "Chewie viu o adiamento. Não disse nada. Só suspirou e voltou a olhar pela janela. 🪟",
-];
-
-const DEADLINE_WARNING_MSGS = [
-  "Faltam {min} minutos. Chewie está olhando com julgamento silencioso. 👀",
-  "{min} minutos. Aquela tarefa não vai se fazer sozinha. Infelizmente. ⏰",
-  "Tic tac. {min} minutinhos. O deploy pode esperar, mas o Chewie não. 🐱",
-  "Só {min} min. Você ainda tem tempo de procrastinar mais um pouco. Mas apenas um. ⚠️",
-  "{min} minutos antes do prazo. Hora de entrar em pânico de forma produtiva. 🔥",
-];
-
-const DEADLINE_EATEN_MSGS = [
-  "Chewie comeu a tarefa '{task}'. Era muito apetitosa para ser entregue no prazo. 😾🍽️",
-  "'{task}' estourou o prazo. Chewie devorou com sal e limão. Chewie perdeu uma vida de vergonha. 💔",
-  "Prazo expirado. Chewie engoliu '{task}' inteira. Foi pra caixinha de reciclagem. 🗑️",
-  "'{task}' foi deletada da existência por Chewie. Há esperança na reciclagem. Talvez. 🐙",
-  "RIP '{task}'. Prazo: não cumprido. Causa mortis: procrastinação avançada. Chewie atesta. 💔",
-];
-
-const RECYCLED_COMPLETE_MSGS = [
-  "Tarefa reciclada e concluída! Chewie está emocionado. Isso era inesperado. 💚😻",
-  "Ressurreição completa! '{task}' voltou da morte e foi entregue. Chewie aprova. 💚",
-  "Você concluiu uma tarefa que o Chewie tinha comido. Ele não sabe se chora ou ronrona. 💚",
-  "'{task}' saiu da reciclagem direto pra feita. Chewie está confuso mas feliz. 💚",
-];
-
-const PROCRASTINATOR_TITLES = [
-  "🏆 Hall da Vergonha — Campeões do Não Fazer",
-  "📋 Tarefas que Você Prometeu Fazer Amanhã (desde 2019)",
-  "🪦 Cemitério das Intenções — R.I.P. Produtividade",
-  "🐢 Olimpíadas do Adiamento — Você Ganhou Ouro",
-  "🤡 Sua Obra-Prima da Procrastinação",
-];
-
 const pad = (n: number) => String(n).padStart(2, "0");
 
-/**
- * Converte um Date para string no formato datetime-local (YYYY-MM-DDTHH:mm)
- * usando a hora LOCAL do dispositivo — compatível com o input datetime-local do HTML.
- */
+/** Converte um Date para "YYYY-MM-DDTHH:mm" (datetime-local, hora local). */
 function toLocalInputString(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/**
- * Retorna a hora atual + mins no formato datetime-local local.
- */
-function nowPlusMins(mins: number): string {
-  return toLocalInputString(new Date(Date.now() + mins * 60_000));
-}
-
-/**
- * Formata uma string datetime-local (YYYY-MM-DDTHH:mm) para exibição no padrão brasileiro.
- * Parseia manualmente para não depender de interpretação de fuso do browser.
- * Exibe: DD/MM HH:mm
- */
+/** Formata um ISO ("YYYY-MM-DDTHH:mm:ss") para "DD/MM HH:mm". */
 function fmtDatetime(iso: string): string {
   if (!iso) return "";
   const [datePart, timePart] = iso.split("T");
@@ -453,267 +256,63 @@ function fmtDatetime(iso: string): string {
   return `${day}/${month} ${hour}:${minute}`;
 }
 
-/**
- * Retorna os minutos restantes até o deadline (negativo = prazo estourado).
- * O input datetime-local (YYYY-MM-DDTHH:mm) é interpretado como hora local
- * pelo browser, e Date.now() retorna ms UTC — ambos são comparáveis diretamente.
- */
+/** Minutos restantes até o deadline (negativo = prazo estourado). */
 function minsUntil(iso: string): number {
   return Math.round((new Date(iso).getTime() - Date.now()) / 60_000);
 }
 
-/**
- * Retorna os ms absolutos de uma string datetime-local.
- * Usado para calcular progresso da barra de tempo.
- */
-function localIsoToMs(iso: string): number {
-  return new Date(iso).getTime();
+/** Aplica máscara DD/MM/AAAA enquanto o usuário digita. */
+function maskDate(raw: string): string {
+  const digits = raw.replace(/\D/g, "").slice(0, 8);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
 }
 
+/** Aplica máscara HH:MM enquanto o usuário digita. */
+function maskTime(raw: string): string {
+  const digits = raw.replace(/\D/g, "").slice(0, 4);
+  if (digits.length <= 2) return digits;
+  return `${digits.slice(0, 2)}:${digits.slice(2)}`;
+}
 
-const INITIAL_TASKS: Task[] = [
-  { id: 1, text: "fazer o README do projeto",  done: true,  defers: 0 },
-  { id: 2, text: "revisar o pull request",      done: false, defers: 3, startAt: nowPlusMins(-30), endAt: nowPlusMins(20) },
-  { id: 3, text: "escrever testes unitários",   done: false, defers: 7 },
-  { id: 4, text: "corrigir bug do login",       done: false, defers: 1, startAt: nowPlusMins(0), endAt: nowPlusMins(90) },
-  { id: 5, text: "deploy em produção",          done: false, defers: 0 },
+/**
+ * Converte "DD/MM/AAAA" + "HH:MM" para "YYYY-MM-DDTHH:mm:ss" (formato do backend).
+ * Retorna undefined se inválido.
+ */
+function parseBrDatetime(date: string, time: string): string | undefined {
+  const dateParts = date.split("/");
+  if (dateParts.length !== 3) return undefined;
+  const [dd, mm, yyyy] = dateParts;
+  if (dd.length !== 2 || mm.length !== 2 || yyyy.length !== 4) return undefined;
+  if (!time.match(/^\d{2}:\d{2}$/)) return undefined;
+  const iso = `${yyyy}-${mm}-${dd}T${time}:00`;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return undefined;
+  return iso;
+}
+
+const PROCRASTINATOR_TITLES = [
+  "🏆 Hall da Vergonha — Campeões do Não Fazer",
+  "📋 Tarefas que Você Prometeu Fazer Amanhã (desde 2019)",
+  "🪦 Cemitério das Intenções — R.I.P. Produtividade",
+  "🐢 Olimpíadas do Adiamento — Você Ganhou Ouro",
+  "🤡 Sua Obra-Prima da Procrastinação",
 ];
 
 /* ═══════════════════════════════════════════════════════
    COMPONENTES
 ═══════════════════════════════════════════════════════ */
 
-/* ─── Tela de morte ─── */
-function DeathScreen({ onRevive }: DeathScreenProps) {
-  return (
-    <div style={{
-      position: "fixed", inset: 0, zIndex: 10000,
-      background: "rgba(4,2,12,0.97)",
-      display: "flex", alignItems: "center", justifyContent: "center",
-      animation: "deathIn 0.6s ease",
-      padding: 24, overflowY: "auto",
-    }}>
-      {/* scanlines */}
-      <div style={{
-        position: "absolute", inset: 0, pointerEvents: "none",
-        background: "repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,0,0,0.15) 3px, rgba(0,0,0,0.15) 6px)",
-      }} />
-
-      <div style={{
-        position: "relative", zIndex: 1,
-        display: "flex", flexDirection: "column", alignItems: "center", gap: 24,
-        maxWidth: 520, width: "100%", textAlign: "center",
-        animation: "deathText 0.7s cubic-bezier(.34,1.2,.64,1) 0.2s both",
-      }}>
-        {/* vidas vazias */}
-        <div style={{ display: "flex", gap: 8 }}>
-          {Array.from({ length: MAX_LIVES }).map((_, i) => (
-            <span key={i} style={{ fontSize: 22, opacity: 0.2, filter: "grayscale(1)" }}>🖤</span>
-          ))}
-        </div>
-
-        {/* imagem da tela quebrada estilo TV CRT */}
-        <div style={{
-          position: "relative", width: "min(320px, 80vw)", aspectRatio: "1/1",
-          borderRadius: 8, overflow: "hidden",
-          border: "3px solid #ff3d6b",
-          boxShadow: "0 0 0 4px #222, 0 0 0 8px #1a1a1a, 0 0 50px rgba(255,61,107,0.6)",
-        }}>
-          {/* scanlines estáticas */}
-          <div style={{
-            position: "absolute", inset: 0, zIndex: 3, pointerEvents: "none",
-            background: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.1) 2px, rgba(0,0,0,0.1) 4px)",
-          }} />
-          {/* vignette */}
-          <div style={{
-            position: "absolute", inset: 0, zIndex: 3, pointerEvents: "none",
-            background: "radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.8) 100%)",
-          }} />
-          <img
-            src={CHEWIE_IMGS["tamagotchi_quebrado"]}
-            alt="Chewie morreu"
-            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-          />
-        </div>
-
-        <div style={{
-          fontFamily: "'Press Start 2P',monospace",
-          fontSize: "clamp(20px,4.5vw,34px)",
-          color: "#ff3d6b",
-          textShadow: "0 0 30px rgba(255,61,107,0.8), 0 0 60px rgba(255,61,107,0.4)",
-          lineHeight: 1.5,
-          animation: "glitch 1.2s steps(1) infinite",
-        }}>
-          CHEWIE<br />MORREU.
-        </div>
-
-        <p style={{
-          fontFamily: "'JetBrains Mono',monospace",
-          fontSize: "clamp(12px,2.5vw,14px)",
-          color: "var(--dim)", lineHeight: 2,
-        }}>
-          7 vidas.<br />
-          Você gastou todas.<br />
-          <span style={{ color: "#ff7c3d" }}>Isso é impressionante.</span><br />
-          No pior sentido.
-        </p>
-
-        <div style={{
-          border: "1px solid rgba(31,255,168,0.3)", borderRadius: 16,
-          padding: "18px 22px", background: "rgba(31,255,168,0.05)", textAlign: "left",
-          width: "100%",
-        }}>
-          <p style={{ fontSize: 11, color: "var(--dim)", marginBottom: 10, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>
-            PARA REVIVER CHEWIE:
-          </p>
-          <p style={{ fontSize: 13, color: "var(--text)", lineHeight: 1.8 }}>
-            Conclua <strong style={{ color: "var(--green)" }}>3 tarefas seguidas</strong> sem adiar nenhuma.<br />
-            Cada combo de 3 devolve uma vida.<br />
-            <em style={{ color: "var(--dim)", fontSize: 11 }}>Sim, você vai ter que trabalhar de verdade.</em>
-          </p>
-        </div>
-
-        <button
-          onClick={onRevive}
-          style={{
-            fontFamily: "'Press Start 2P',monospace",
-            fontSize: "clamp(11px,2vw,14px)",
-            padding: "18px 36px", borderRadius: 14,
-            border: "2px solid var(--green)",
-            background: "rgba(31,255,168,0.1)",
-            color: "var(--green)",
-            animation: "reviveBtn 2s ease-in-out infinite",
-            cursor: "pointer",
-          }}
-        >
-          ▶ NOVA PARTIDA
-        </button>
-
-        <p style={{ fontSize: 10, color: "#ff3d6b", fontFamily: "'JetBrains Mono',monospace", opacity: 0.7 }}>
-          (reseta barras e tarefas — você vai precisar)
-        </p>
-      </div>
-    </div>
-  );
-}
-
-/* ─── Vidas (corações) ─── */
-function LivesDisplay({ lives, maxLives }: LivesDisplayProps) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-      <span style={{
-        fontSize: 10, color: "var(--dim)",
-        fontFamily: "'JetBrains Mono',monospace",
-        letterSpacing: 2, marginRight: 2,
-      }}>VIDAS</span>
-      <div style={{ display: "flex", gap: 3 }}>
-        {Array.from({ length: maxLives }).map((_, i) => {
-          const active = i < lives;
-          const isLast = active && lives === 1;
-          return (
-            <span
-              key={i}
-              style={{
-                fontSize: 18,
-                filter: active ? "none" : "grayscale(1)",
-                opacity: active ? 1 : 0.2,
-                animation: isLast ? "blink 0.8s ease-in-out infinite" : undefined,
-                transition: "opacity 0.4s, filter 0.4s",
-              }}
-            >
-              {active ? "❤️" : "🖤"}
-            </span>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-/* ─── Modal caos (confirmação de adiamento) ─── */
-function ChaosModal({ taskText, onConfirm, onCancel }: ChaosModalProps) {
-  const lines = [
-    "sério mesmo?",
-    "você quer ADIAR isso?",
-    `"${taskText}" vai ficar esperando MAIS?`,
-    "Chewie está julgando você agora.",
-    "de verdade. olha pra ele.",
-    "...tá, mas não diga que eu não avisei. 🐙",
-  ];
-
-  return (
-    <div style={{
-      position: "fixed", inset: 0, zIndex: 9999,
-      background: "rgba(6,4,17,0.88)", backdropFilter: "blur(8px)",
-      display: "flex", alignItems: "center", justifyContent: "center",
-      padding: 16, animation: "overlayIn 0.2s ease",
-    }}>
-      <div style={{
-        background: "#0e0720", border: "2px solid #ff3d6b",
-        borderRadius: 20, padding: "32px 28px", maxWidth: 420, width: "100%",
-        boxShadow: "0 0 60px rgba(255,61,107,0.4)",
-        animation: "modalIn 0.3s cubic-bezier(.34,1.56,.64,1)",
-        textAlign: "center",
-      }}>
-        <div style={{ fontSize: 52, marginBottom: 16 }}>😾</div>
-        <h2 style={{
-          fontFamily: "'Press Start 2P', monospace",
-          fontSize: "clamp(11px,2vw,14px)",
-          color: "#ff3d6b", marginBottom: 20, lineHeight: 1.8,
-          textShadow: "0 0 16px rgba(255,61,107,0.7)",
-        }}>TEM CERTEZA DISSO?</h2>
-
-        <div style={{
-          background: "rgba(255,61,107,0.07)",
-          border: "1px solid rgba(255,61,107,0.25)",
-          borderRadius: 12, padding: "16px 18px", marginBottom: 24,
-          textAlign: "left",
-        }}>
-          {lines.map((line, i) => (
-            <p key={i} style={{
-              fontSize:     i === 2 ? 13 : i === 5 ? 14 : 12,
-              color:        i === 2 ? "#f0c0ff" : i === 5 ? "#ff7c3d" : "var(--text)",
-              marginBottom: i < lines.length - 1 ? 8 : 0,
-              fontStyle:    i === 2 ? "italic" : "normal",
-              fontWeight:   i === 5 ? 700 : 400,
-              lineHeight:   1.5,
-            }}>{line}</p>
-          ))}
-        </div>
-
-        <div style={{ display: "flex", gap: 12 }}>
-          <button onClick={onCancel} style={{
-            flex: 1, padding: "14px 0", borderRadius: 12,
-            border: "1px solid var(--border)",
-            background: "rgba(31,255,168,0.1)",
-            color: "var(--green)", fontSize: 14, fontWeight: 700,
-          }}>
-            🏃 FUGIR (voltar atrás)
-          </button>
-          <button onClick={onConfirm} style={{
-            flex: 1, padding: "14px 0", borderRadius: 12,
-            border: "1px solid rgba(255,61,107,0.5)",
-            background: "rgba(255,61,107,0.12)",
-            color: "#ff7c7c", fontSize: 14, fontWeight: 700,
-          }}>
-            😤 SIM, ADIO MESMO
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* ─── Tela TV CRT ─── */
-function TvScreen({ mood, animShake, lives }: TvScreenProps) {
-  const isDying = lives <= 2;
+function TvScreen({ mood, animShake }: TvScreenProps) {
   return (
     <div style={{
       position: "relative", background: "#111",
       borderRadius: 8, overflow: "hidden", aspectRatio: "1/1", width: "100%",
       boxShadow: `inset 0 0 30px rgba(0,0,0,0.8), 0 0 0 4px #222, 0 0 0 8px #1a1a1a, 0 0 40px ${mood.accent}55`,
       animation: animShake ? "shake 0.4s ease" : undefined,
-      border: `3px solid ${isDying ? "#ff3d6b" : mood.accent}`,
+      border: `3px solid ${mood.accent}`,
       transition: "border-color 0.5s, box-shadow 0.5s",
     }}>
       {/* scanlines estáticas */}
@@ -738,11 +337,7 @@ function TvScreen({ mood, animShake, lives }: TvScreenProps) {
         alt={mood.label}
         style={{
           width: "100%", height: "100%", objectFit: "cover", display: "block",
-          filter: mood.glitch
-            ? "contrast(1.4) saturate(0) brightness(0.7)"
-            : isDying
-              ? "saturate(0.4) brightness(0.8)"
-              : "none",
+          filter: mood.glitch ? "contrast(1.4) saturate(1.2) brightness(0.85)" : "none",
           transition: "filter 0.5s",
         }}
       />
@@ -754,28 +349,15 @@ function TvScreen({ mood, animShake, lives }: TvScreenProps) {
         }}>
           <div style={{
             fontFamily: "'Press Start 2P', monospace",
-            fontSize: "clamp(14px,3.5vw,22px)",
+            fontSize: "clamp(12px,3vw,20px)",
             color: "#1fffa8",
             textShadow: "0 0 20px #1fffa8, 3px 0 #ff3d6b, -3px 0 #3dbbff",
             lineHeight: 1.6, textAlign: "center",
             animation: "glitch 0.8s steps(1) infinite",
             padding: "0 16px",
           }}>
-            SYSTEM ERROR.<br />TAMAGOTCHI<br />DAMAGED.
+            WORKSPACE<br />DESTROYED.
           </div>
-        </div>
-      )}
-
-      {/* aviso de vida baixa */}
-      {isDying && !mood.glitch && (
-        <div style={{
-          position: "absolute", top: 10, left: 10, zIndex: 6,
-          background: "rgba(255,61,107,0.85)",
-          fontFamily: "'Press Start 2P',monospace",
-          fontSize: 8, color: "#fff", padding: "4px 8px", borderRadius: 5,
-          animation: "blink 0.7s ease-in-out infinite",
-        }}>
-          {lives === 1 ? "⚠ ÚLTIMA VIDA" : "⚠ VIDA BAIXA"}
         </div>
       )}
 
@@ -796,6 +378,7 @@ function TvScreen({ mood, animShake, lives }: TvScreenProps) {
 
 /* ─── Barra de progresso ─── */
 function BarRow({ label, value, barColor, glowColor, textColor }: BarRowProps) {
+  const v = clamp(Math.round(value));
   return (
     <div style={{ display: "grid", gridTemplateColumns: "90px 1fr 42px", alignItems: "center", gap: 8, marginBottom: 10 }}>
       <span style={{ fontSize: 10, color: "var(--dim)", textAlign: "right", letterSpacing: 1, fontFamily: "'JetBrains Mono',monospace" }}>
@@ -807,21 +390,21 @@ function BarRow({ label, value, barColor, glowColor, textColor }: BarRowProps) {
         overflow: "hidden", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.5)",
       }}>
         <div style={{
-          height: "100%", width: `${value}%`, borderRadius: 999,
+          height: "100%", width: `${v}%`, borderRadius: 999,
           background: barColor,
           boxShadow: `0 0 10px ${glowColor}`,
           transition: "width 0.7s cubic-bezier(.34,1.56,.64,1)",
         }} />
       </div>
       <span style={{ fontSize: 11, fontWeight: 700, color: textColor, fontFamily: "'JetBrains Mono',monospace" }}>
-        {value}%
+        {v}%
       </span>
     </div>
   );
 }
 
 /* ─── Card do pet ─── */
-function PetCard({ mood, bars, animShake, lives }: PetCardProps) {
+function PetCard({ mood, cat, animShake }: PetCardProps) {
   return (
     <section style={{
       position: "relative",
@@ -842,10 +425,10 @@ function PetCard({ mood, bars, animShake, lives }: PetCardProps) {
         <p style={{ color: "var(--dim)", letterSpacing: 5, fontSize: 10, fontFamily: "'JetBrains Mono',monospace" }}>
           SEU PET FLERKEN
         </p>
-        <LivesDisplay lives={lives} maxLives={MAX_LIVES} />
+        <span style={{ fontSize: 22 }}>{mood.emoji}</span>
       </div>
 
-      <TvScreen mood={mood} animShake={animShake} lives={lives} />
+      <TvScreen mood={mood} animShake={animShake} />
 
       <div style={{ textAlign: "center", margin: "16px 0 14px" }}>
         <p style={{ color: "var(--dim)", letterSpacing: 3, fontSize: 10, marginBottom: 4, fontFamily: "'JetBrains Mono',monospace" }}>
@@ -861,9 +444,9 @@ function PetCard({ mood, bars, animShake, lives }: PetCardProps) {
       </div>
 
       <div style={{ marginBottom: 16 }}>
-        <BarRow label="COMMITS"     value={bars.commits}  barColor="linear-gradient(90deg,#14d68a,#1fffa8)"               glowColor="#1fffa8"        textColor="var(--green)"    />
-        <BarRow label="PROCRASTIN." value={bars.procrast}  barColor="linear-gradient(90deg,#ff6a2b,#ff7c3d)"              glowColor="#ff7c3d"        textColor="var(--orange)"   />
-        <BarRow label="HUMOR"       value={bars.humor}     barColor="linear-gradient(90deg,var(--purple),var(--magenta))" glowColor="var(--purple)"  textColor="var(--purple-l)" />
+        <BarRow label="FELICIDADE"  value={cat?.happiness ?? 0}        barColor="linear-gradient(90deg,#14d68a,#1fffa8)"               glowColor="#1fffa8"        textColor="var(--green)"    />
+        <BarRow label="FOME"        value={cat?.hunger ?? 0}           barColor="linear-gradient(90deg,#ff6a2b,#ff7c3d)"              glowColor="#ff7c3d"        textColor="var(--orange)"   />
+        <BarRow label="DESTRUIÇÃO"  value={cat?.destruction_level ?? 0} barColor="linear-gradient(90deg,var(--purple),var(--magenta))" glowColor="var(--purple)"  textColor="var(--purple-l)" />
       </div>
 
       <blockquote style={{
@@ -872,7 +455,7 @@ function PetCard({ mood, bars, animShake, lives }: PetCardProps) {
         textAlign: "left",
       }}>
         <p style={{ fontStyle: "italic", color: "#f0e4ff", marginBottom: 5, lineHeight: 1.55, fontSize: 13 }}>
-          {mood.speech}
+          {cat?.description ?? "Carregando o estado do Chewie..."}
         </p>
         <p style={{ color: "var(--purple-l)", fontSize: 11 }}>{mood.author}</p>
       </blockquote>
@@ -881,43 +464,12 @@ function PetCard({ mood, bars, animShake, lives }: PetCardProps) {
 }
 
 /* ─── Card de tarefas ─── */
-
-/** Aplica máscara DD/MM/AAAA enquanto o usuário digita */
-function maskDate(raw: string): string {
-  const digits = raw.replace(/\D/g, "").slice(0, 8);
-  if (digits.length <= 2) return digits;
-  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
-  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
-}
-
-/** Aplica máscara HH:MM enquanto o usuário digita */
-function maskTime(raw: string): string {
-  const digits = raw.replace(/\D/g, "").slice(0, 4);
-  if (digits.length <= 2) return digits;
-  return `${digits.slice(0, 2)}:${digits.slice(2)}`;
-}
-
-/**
- * Converte "DD/MM/AAAA" + "HH:MM" para "YYYY-MM-DDTHH:mm" (armazenamento interno).
- * Retorna undefined se inválido.
- */
-function parseBrDatetime(date: string, time: string): string | undefined {
-  const dateParts = date.split("/");
-  if (dateParts.length !== 3) return undefined;
-  const [dd, mm, yyyy] = dateParts;
-  if (dd.length !== 2 || mm.length !== 2 || yyyy.length !== 4) return undefined;
-  if (!time.match(/^\d{2}:\d{2}$/)) return undefined;
-  const iso = `${yyyy}-${mm}-${dd}T${time}`;
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return undefined;
-  return iso;
-}
-
-function TaskCard({ tasks, setTasks, onComplete, onRequestDefer, onAbandon }: TaskCardProps) {
+function TaskCard({ tasks, pending, onCreate, onComplete, onDefer, onAbandon }: TaskCardProps) {
   const [newText, setNewText]       = useState("");
-  const [newEndDate, setNewEndDate] = useState(""); // DD/MM/AAAA (exibição)
-  const [newEndTime, setNewEndTime] = useState(""); // HH:MM       (exibição)
+  const [newEndDate, setNewEndDate] = useState(""); // DD/MM/AAAA
+  const [newEndTime, setNewEndTime] = useState(""); // HH:MM
   const [expanded, setExpanded]     = useState(false);
+  const [saving, setSaving]         = useState(false);
 
   // re-render a cada 30s para atualizar contadores de tempo restante
   const [, setTick] = useState(0);
@@ -926,38 +478,26 @@ function TaskCard({ tasks, setTasks, onComplete, onRequestDefer, onAbandon }: Ta
     return () => clearInterval(id);
   }, []);
 
-  const pending = tasks.filter(t => !t.done && !t.eaten).length;
+  const handleAdd = useCallback(async () => {
+    if (!newText.trim() || saving) return;
+    // se o usuário não definiu prazo, assume +1 dia a partir de agora
+    const dataTermino =
+      parseBrDatetime(newEndDate, newEndTime) ??
+      `${toLocalInputString(new Date(Date.now() + 24 * 60 * 60_000))}:00`;
+    setSaving(true);
+    try {
+      await onCreate(newText.trim(), dataTermino);
+      setNewText("");
+      setNewEndDate("");
+      setNewEndTime("");
+      setExpanded(false);
+    } finally {
+      setSaving(false);
+    }
+  }, [newText, newEndDate, newEndTime, saving, onCreate]);
 
-  const handleAdd = useCallback(() => {
-    if (!newText.trim()) return;
-    const endAt = parseBrDatetime(newEndDate, newEndTime);
-    setTasks(prev => [...prev, {
-      id:      Date.now(),
-      text:    newText.trim(),
-      done:    false,
-      defers:  0,
-      startAt: toLocalInputString(new Date()),
-      endAt,
-    }]);
-    setNewText("");
-    setNewEndDate("");
-    setNewEndTime("");
-    setExpanded(false);
-    // 🔊 ao criar a tarefa, a trilha do Chewie começa a tocar sozinha
-    window.dispatchEvent(new CustomEvent(PLAY_MUSIC_EVENT));
-  }, [newText, newEndDate, newEndTime, setTasks]);
-
-  const handleComplete = useCallback((id: number) => {
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, done: true } : t));
-    onComplete(id);
-  }, [setTasks, onComplete]);
-
-  const handleAbandon = useCallback((id: number) => {
-    setTasks(prev => prev.filter(t => t.id !== id));
-    onAbandon();
-  }, [setTasks, onAbandon]);
-
-  const activeTasks = tasks.filter(t => !t.done && !t.eaten);
+  // tarefas visíveis: quem desistiu some; concluídas ficam (riscadas)
+  const visible = tasks.filter(t => !t.desistiu);
 
   return (
     <section style={{
@@ -982,21 +522,16 @@ function TaskCard({ tasks, setTasks, onComplete, onRequestDefer, onAbandon }: Ta
 
       {/* lista */}
       <ul style={{ listStyle: "none", marginBottom: 12 }}>
-        {activeTasks.map(task => {
-          const hasDeadline = !!task.endAt;
-          const nowMs       = Date.now();
-          const minsLeft    = hasDeadline
-            ? Math.round((new Date(task.endAt!).getTime() - nowMs) / 60_000)
-            : null;
-          const isUrgent    = minsLeft !== null && minsLeft <= 15 && minsLeft > 0;
-          const isOverdue   = minsLeft !== null && minsLeft <= 0;
-
-          const startMs = task.startAt ? localIsoToMs(task.startAt) : nowMs;
-          const endMs   = hasDeadline  ? localIsoToMs(task.endAt!)  : 0;
-          const totalMs = endMs - startMs;
-          const pct     = totalMs > 0
-            ? Math.min(100, Math.max(0, ((nowMs - startMs) / totalMs) * 100))
-            : 0;
+        {visible.length === 0 && (
+          <li style={{ fontSize: 12, color: "var(--dim)", padding: "12px 4px", fontStyle: "italic" }}>
+            Nenhuma tarefa por aqui. O Chewie aprova — mas seu backlog não.
+          </li>
+        )}
+        {visible.map(task => {
+          const done       = task.concluida;
+          const minsLeft   = task.data_termino ? minsUntil(task.data_termino) : null;
+          const isUrgent   = !done && minsLeft !== null && minsLeft <= 15 && minsLeft > 0;
+          const isOverdue  = !done && minsLeft !== null && minsLeft <= 0;
 
           return (
             <li key={task.id} className="task-item" style={{
@@ -1009,93 +544,95 @@ function TaskCard({ tasks, setTasks, onComplete, onRequestDefer, onAbandon }: Ta
                 : isOverdue
                   ? "rgba(255,61,107,0.08)"
                   : "transparent",
+              opacity: done ? 0.6 : 1,
             }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <button
-                  onClick={() => handleComplete(task.id)}
-                  aria-label="concluir tarefa"
+                  onClick={() => !done && onComplete(task.id)}
+                  aria-label={done ? "tarefa concluída" : "concluir tarefa"}
+                  disabled={done}
                   style={{
                     flexShrink: 0, width: 22, height: 22, borderRadius: 6,
-                    cursor: "pointer", border: "2px solid var(--border)",
-                    background: "transparent",
+                    cursor: done ? "default" : "pointer",
+                    border: `2px solid ${done ? "var(--green)" : "var(--border)"}`,
+                    background: done ? "var(--green)" : "transparent",
+                    color: "#04231a", fontSize: 14, fontWeight: 700, lineHeight: 1,
                     display: "flex", alignItems: "center", justifyContent: "center",
                     transition: "background 0.2s, border-color 0.2s",
                   }}
-                />
+                >{done ? "✓" : ""}</button>
                 <span style={{
                   flex: 1, fontSize: 13, lineHeight: 1.4, wordBreak: "break-word",
-                  color: isOverdue ? "var(--red)" : isUrgent ? "var(--orange)" : "var(--text)",
+                  textDecoration: done ? "line-through" : "none",
+                  color: done
+                    ? "var(--dim)"
+                    : isOverdue ? "var(--red)" : isUrgent ? "var(--orange)" : "var(--text)",
                 }}>
-                  {task.text}
-                  {task.defers > 0 && (
+                  {task.nome}
+                  {task.vezes_adiada > 0 && (
                     <em style={{ color: "var(--magenta)", fontStyle: "normal", fontWeight: 700, fontSize: 11, marginLeft: 5 }}>
-                      ×{task.defers}
+                      ×{task.vezes_adiada}
                     </em>
                   )}
                 </span>
-                <div className="task-actions" style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                  <button
-                    onClick={() => onRequestDefer(task.id, task.text)}
-                    style={{
-                      border: "1px solid var(--border)", background: "transparent",
-                      color: "var(--text)", padding: "7px 12px", borderRadius: 9, fontSize: 12,
-                    }}
-                  >adiar</button>
-                  <button
-                    onClick={() => handleAbandon(task.id)}
-                    aria-label="desistir desta tarefa"
-                    style={{
-                      width: 34, height: 34, flexShrink: 0,
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      border: "1px solid rgba(255,61,107,0.3)",
-                      borderRadius: 9, background: "rgba(255,61,107,0.07)",
-                      color: "var(--red)", fontSize: 13,
-                    }}
-                  >🏳️</button>
-                </div>
+                {!done && (
+                  <div className="task-actions" style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                    <button
+                      onClick={() => onComplete(task.id)}
+                      style={{
+                        border: "1px solid rgba(31,255,168,0.35)", background: "rgba(31,255,168,0.08)",
+                        color: "var(--green)", padding: "7px 12px", borderRadius: 9, fontSize: 12,
+                      }}
+                    >concluir</button>
+                    <button
+                      onClick={() => onDefer(task)}
+                      style={{
+                        border: "1px solid var(--border)", background: "transparent",
+                        color: "var(--text)", padding: "7px 12px", borderRadius: 9, fontSize: 12,
+                      }}
+                    >adiar 1 dia</button>
+                    <button
+                      onClick={() => onAbandon(task.id)}
+                      aria-label="desistir desta tarefa"
+                      title="desistir"
+                      style={{
+                        width: 34, height: 34, flexShrink: 0,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        border: "1px solid rgba(255,61,107,0.3)",
+                        borderRadius: 9, background: "rgba(255,61,107,0.07)",
+                        color: "var(--red)", fontSize: 13,
+                      }}
+                    >🏳️</button>
+                  </div>
+                )}
               </div>
 
-              {/* deadline info — renderiza imediatamente após cadastro */}
-              {hasDeadline && (
+              {/* deadline info */}
+              {task.data_termino && (
                 <div style={{ marginTop: 6, marginLeft: 32, display: "flex", flexDirection: "column", gap: 4 }}>
                   <div style={{
-                    display: "flex", alignItems: "center", gap: 8,
-                    flexWrap: "wrap",
+                    display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
                     fontFamily: "'JetBrains Mono',monospace", fontSize: 10,
                   }}>
-                    {task.startAt && (
-                      <span style={{ color: "var(--dim)" }}>▶ {fmtDatetime(task.startAt)}</span>
-                    )}
                     <span style={{
-                      color: isOverdue ? "var(--red)" : isUrgent ? "var(--orange)" : "var(--purple-l)",
+                      color: done ? "var(--dim)" : isOverdue ? "var(--red)" : isUrgent ? "var(--orange)" : "var(--purple-l)",
                       fontWeight: 600,
-                      animation: isUrgent || isOverdue ? "blink 0.9s ease-in-out infinite" : undefined,
+                      animation: !done && (isUrgent || isOverdue) ? "blink 0.9s ease-in-out infinite" : undefined,
                     }}>
-                      ⏰ {fmtDatetime(task.endAt!)}
+                      ⏰ {fmtDatetime(task.data_termino)}
                     </span>
-                    <span style={{
-                      fontWeight: 700,
-                      color: isOverdue ? "var(--red)" : isUrgent ? "var(--orange)" : "var(--dim)",
-                      animation: isUrgent || isOverdue ? "blink 0.9s ease-in-out infinite" : undefined,
-                    }}>
-                      {isOverdue
-                        ? `⚠ ${Math.abs(minsLeft!)}min atrasada`
-                        : `${minsLeft}min restantes`}
-                    </span>
+                    {!done && minsLeft !== null && (
+                      <span style={{
+                        fontWeight: 700,
+                        color: isOverdue ? "var(--red)" : isUrgent ? "var(--orange)" : "var(--dim)",
+                        animation: isUrgent || isOverdue ? "blink 0.9s ease-in-out infinite" : undefined,
+                      }}>
+                        {isOverdue
+                          ? `⚠ ${Math.abs(minsLeft)}min atrasada`
+                          : `${minsLeft}min restantes`}
+                      </span>
+                    )}
                   </div>
-                  {!isOverdue && totalMs > 0 && (
-                    <div style={{
-                      height: 4, borderRadius: 999,
-                      background: "rgba(255,255,255,0.06)", overflow: "hidden",
-                    }}>
-                      <div style={{
-                        height: "100%", width: `${pct}%`, borderRadius: 999,
-                        background: isUrgent
-                          ? "linear-gradient(90deg,#ff6a2b,#ff3d6b)"
-                          : "linear-gradient(90deg,var(--purple),var(--magenta))",
-                      }} />
-                    </div>
-                  )}
                 </div>
               )}
             </li>
@@ -1111,10 +648,12 @@ function TaskCard({ tasks, setTasks, onComplete, onRequestDefer, onAbandon }: Ta
             onChange={e => setNewText(e.target.value)}
             onKeyDown={e => e.key === "Enter" && !expanded && handleAdd()}
             placeholder="nova tarefa..."
+            disabled={saving}
             style={{
               flex: 1, background: "rgba(255,255,255,0.04)",
               border: "1px solid var(--border)", borderRadius: 10,
               padding: "11px 13px", color: "var(--text)", fontSize: 13, outline: "none",
+              opacity: saving ? 0.6 : 1,
             }}
           />
           <button
@@ -1131,13 +670,15 @@ function TaskCard({ tasks, setTasks, onComplete, onRequestDefer, onAbandon }: Ta
           <button
             onClick={handleAdd}
             aria-label="adicionar tarefa"
+            disabled={saving}
             style={{
               padding: "11px 16px", borderRadius: 10,
               border: "1px solid var(--border)",
               background: "rgba(155,80,255,0.15)",
               color: "var(--purple-l)", fontSize: 18, fontWeight: 700,
+              opacity: saving ? 0.6 : 1, cursor: saving ? "wait" : "pointer",
             }}
-          >+</button>
+          >{saving ? "…" : "+"}</button>
         </div>
 
         {expanded && (
@@ -1150,7 +691,7 @@ function TaskCard({ tasks, setTasks, onComplete, onRequestDefer, onAbandon }: Ta
               fontSize: 10, color: "var(--dim)",
               fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1,
             }}>
-              PRAZO — DD/MM/AAAA e HH:MM (24h)
+              PRAZO — DD/MM/AAAA e HH:MM (24h) — opcional (default: +1 dia)
             </span>
             <div style={{ display: "flex", gap: 8 }}>
               <input
@@ -1186,7 +727,7 @@ function TaskCard({ tasks, setTasks, onComplete, onRequestDefer, onAbandon }: Ta
             {/* preview ao vivo */}
             {parseBrDatetime(newEndDate, newEndTime) && (() => {
               const preview = parseBrDatetime(newEndDate, newEndTime)!;
-              const minsP   = Math.round((new Date(preview).getTime() - Date.now()) / 60_000);
+              const minsP   = minsUntil(preview);
               return (
                 <span style={{
                   fontSize: 10, fontFamily: "'JetBrains Mono',monospace",
@@ -1198,135 +739,18 @@ function TaskCard({ tasks, setTasks, onComplete, onRequestDefer, onAbandon }: Ta
                 </span>
               );
             })()}
-
-            <span style={{ fontSize: 10, color: "var(--dim)", fontFamily: "'JetBrains Mono',monospace" }}>
-              ▶ Início registrado automaticamente ao salvar
-            </span>
           </div>
         )}
       </div>
     </section>
   );
 }
-function DeadlineAlert({ task, onClose }: DeadlineAlertProps) {
-  const mins = task.endAt ? minsUntil(task.endAt) : 0;
-  const isOver = mins <= 0;
-  const msg = isOver
-    ? `Chewie está COMENDO '${task.text}'. Prazo estourado há ${Math.abs(mins)}min. 😾🍽️`
-    : pickRandom(DEADLINE_WARNING_MSGS).replace("{min}", String(mins));
 
-  return (
-    <div style={{
-      position: "fixed", bottom: 24, right: 24, zIndex: 9993,
-      maxWidth: 340, width: "calc(100% - 48px)",
-      background: isOver ? "#1a0008" : "#0e0720",
-      border: `1px solid ${isOver ? "rgba(255,61,107,0.7)" : "rgba(255,124,61,0.6)"}`,
-      borderRadius: 18, padding: "18px 20px",
-      boxShadow: isOver
-        ? "0 0 40px rgba(255,61,107,0.35), 0 8px 32px rgba(0,0,0,0.5)"
-        : "0 0 40px rgba(255,124,61,0.25), 0 8px 32px rgba(0,0,0,0.5)",
-      animation: "deadlineIn 0.4s cubic-bezier(.34,1.56,.64,1)",
-      pointerEvents: "all",
-    }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-        <span style={{ fontSize: 20 }}>{isOver ? "😾" : "⏰"}</span>
-        <span style={{
-          fontFamily: "'JetBrains Mono',monospace",
-          fontSize: 10, flex: 1,
-          color: isOver ? "var(--red)" : "var(--orange)",
-          letterSpacing: 2,
-          animation: isOver ? "blink 0.6s ease-in-out infinite" : undefined,
-        }}>
-          {isOver ? "PRAZO ESTOURADO" : "PRAZO SE APROXIMANDO"}
-        </span>
-        <button
-          onClick={e => { e.stopPropagation(); onClose(); }}
-          aria-label="fechar alerta"
-          style={{
-            flexShrink: 0, width: 28, height: 28,
-            display: "flex", alignItems: "center", justifyContent: "center",
-            background: "rgba(255,255,255,0.07)",
-            border: "1px solid rgba(255,255,255,0.12)",
-            borderRadius: 8, color: "#fff", fontSize: 16, cursor: "pointer",
-          }}
-        >×</button>
-      </div>
-      <p style={{ fontSize: 13, color: "var(--text)", lineHeight: 1.6, fontStyle: "italic" }}>
-        "{msg}"
-      </p>
-      <p style={{ fontSize: 10, color: "var(--dim)", marginTop: 8, fontFamily: "'JetBrains Mono',monospace" }}>
-        — Chewie, cronometrando sua desgraça
-      </p>
-    </div>
-  );
-}
-
-/* ─── Caixinha de reciclagem ─── */
-function RecycleBin({ tasks, onRestore, onCompleteEaten }: RecycleBinProps) {
-  const eaten = tasks.filter(t => t.eaten);
-  if (eaten.length === 0) return null;
-
-  return (
-    <section style={{
-      background: "rgba(155,80,255,0.05)",
-      border: "1px solid rgba(155,80,255,0.3)",
-      borderRadius: 22, padding: "clamp(14px,3vw,22px)",
-      backdropFilter: "blur(16px)",
-    }}>
-      <h3 style={{
-        fontFamily: "'Press Start 2P',monospace",
-        fontSize: "clamp(8px,1.5vw,10px)",
-        color: "var(--purple-l)", marginBottom: 16, lineHeight: 1.7,
-      }}>🗑️ Caixinha de Reciclagem do Chewie</h3>
-      <p style={{ fontSize: 11, color: "var(--dim)", marginBottom: 14, fontFamily: "'JetBrains Mono',monospace" }}>
-        Tarefas comidas por prazo estourado. Conclua para recuperar uma vida.
-      </p>
-      <ul style={{ listStyle: "none", display: "flex", flexDirection: "column", gap: 8 }}>
-        {eaten.map(task => (
-          <li key={task.id} style={{
-            display: "flex", alignItems: "center", gap: 10,
-            padding: "10px 12px",
-            background: "rgba(155,80,255,0.08)",
-            border: "1px solid rgba(155,80,255,0.2)",
-            borderRadius: 10,
-          }}>
-            <span style={{ fontSize: 16 }}>🗑️</span>
-            <span style={{
-              flex: 1, fontSize: 13, color: "var(--dim)",
-              textDecoration: "line-through", wordBreak: "break-word",
-            }}>{task.text}</span>
-            <div style={{ display: "flex", gap: 6 }}>
-              <button
-                onClick={() => onCompleteEaten(task.id)}
-                title="Concluir mesmo assim (+1 vida)"
-                style={{
-                  padding: "6px 12px", borderRadius: 8, fontSize: 12,
-                  border: "1px solid rgba(31,255,168,0.4)",
-                  background: "rgba(31,255,168,0.08)",
-                  color: "var(--green)", cursor: "pointer",
-                }}>✓ concluir</button>
-              <button
-                onClick={() => onRestore(task.id)}
-                title="Restaurar tarefa"
-                style={{
-                  padding: "6px 10px", borderRadius: 8, fontSize: 12,
-                  border: "1px solid var(--border)",
-                  background: "transparent",
-                  color: "var(--text)", cursor: "pointer",
-                }}>↩ restaurar</button>
-            </div>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-/* ─── Tabela de tarefas adiadas ─── */
+/* ─── Tabela de tarefas adiadas (vezes_adiada) ─── */
 function DeferredTable({ tasks }: DeferredTableProps) {
   const deferred = tasks
-    .filter(t => !t.done && t.defers > 0)
-    .sort((a, b) => b.defers - a.defers);
+    .filter(t => !t.concluida && !t.desistiu && t.vezes_adiada > 0)
+    .sort((a, b) => b.vezes_adiada - a.vezes_adiada);
 
   if (deferred.length === 0) return null;
 
@@ -1370,7 +794,7 @@ function DeferredTable({ tasks }: DeferredTableProps) {
             {deferred.map(task => (
               <tr key={task.id}>
                 <td style={{ padding: "10px", color: "var(--text)", borderBottom: "1px solid rgba(255,255,255,0.04)", wordBreak: "break-word", maxWidth: 180 }}>
-                  {task.text}
+                  {task.nome}
                 </td>
                 <td style={{ padding: "10px", borderBottom: "1px solid rgba(255,255,255,0.04)", textAlign: "center" }}>
                   <span style={{
@@ -1378,15 +802,15 @@ function DeferredTable({ tasks }: DeferredTableProps) {
                     border: "1px solid rgba(255,61,107,0.35)",
                     borderRadius: 6, padding: "3px 8px",
                     fontFamily: "'JetBrains Mono',monospace", fontWeight: 700, fontSize: 12,
-                  }}>×{task.defers}</span>
+                  }}>×{task.vezes_adiada}</span>
                 </td>
                 <td style={{ padding: "10px", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
                   <span style={{
                     fontSize: 10, color: "var(--orange)",
                     fontFamily: "'JetBrains Mono',monospace",
-                    animation: task.defers >= 5 ? "blink 1s ease infinite" : undefined,
+                    animation: task.vezes_adiada >= 5 ? "blink 1s ease infinite" : undefined,
                   }}>
-                    {getDeferStatus(task.defers)}
+                    {getDeferStatus(task.vezes_adiada)}
                   </span>
                 </td>
               </tr>
@@ -1398,20 +822,18 @@ function DeferredTable({ tasks }: DeferredTableProps) {
   );
 }
 
-/* ─── Card de aviso ─── */
-function WarnCard({ moodKey, lives }: WarnCardProps) {
+/* ─── Card de aviso (por humor do gato) ─── */
+function WarnCard({ moodKey }: WarnCardProps) {
   type WarnVariant = { border: string; bg: string; titleColor: string; title: string; text: string; pulse?: boolean };
 
-  const variants: Record<string, WarnVariant> = {
-    calmo:               { border: "rgba(31,255,168,0.3)",  bg: "rgba(31,255,168,0.05)",  titleColor: "var(--green)",   title: "CHEWIE ESTÁ DE BOA 😸",    text: "Continue fazendo commits e concluindo tarefas para manter o humor em alta!" },
-    happy:               { border: "rgba(31,255,168,0.5)",  bg: "rgba(31,255,168,0.08)",  titleColor: "var(--green)",   title: "CHEWIE ESTÁ FELIZ! 💕",     text: "Uau, você está produtivo! Chewie está ronronando. Não estrague isso." },
-    ficando_bravo:       { border: "rgba(255,124,61,0.4)",  bg: "rgba(255,124,61,0.06)",  titleColor: "var(--orange)",  title: "CHEWIE ESTÁ IRRITADO ⚠️",  text: "Ele está com raiva. Uma tarefa adiada a mais e os tentáculos aparecem." },
-    irritado:            { border: "rgba(255,61,107,0.45)", bg: "rgba(255,61,107,0.07)",  titleColor: "var(--red)",     title: "CHEWIE ESTÁ BRAVO! 🔥",     text: "Se você adiar mais uma vez, ele vai escrever groséia no seu README e apagar o último commit." },
-    fora_de_controle:    { border: "rgba(224,64,251,0.5)",  bg: "rgba(224,64,251,0.07)",  titleColor: "var(--magenta)", title: "🐙 MODO CAOS ATIVADO",      text: "Tentáculos liberados. Seu repositório está em risco interdimensional. CONCLUA UMA TAREFA AGORA." },
-    tamagotchi_quebrado: { border: "rgba(255,61,107,0.7)",  bg: "rgba(255,61,107,0.12)",  titleColor: "#ff3d6b",        title: "💀 SISTEMA DESTRUÍDO",      text: "PARABÉNS. Você conseguiu quebrar o Chewie. Isso é impressionante no pior sentido possível.", pulse: true },
+  const variants: Record<CatMood, WarnVariant> = {
+    happy:   { border: "rgba(31,255,168,0.5)",  bg: "rgba(31,255,168,0.08)",  titleColor: "var(--green)",   title: "CHEWIE ESTÁ FELIZ! 💕",   text: "Uau, você está produtivo! Chewie está ronronando. Não estrague isso." },
+    neutral: { border: "rgba(155,80,255,0.4)",  bg: "rgba(155,80,255,0.06)",  titleColor: "var(--purple-l)", title: "CHEWIE ESTÁ NEUTRO 🐱",  text: "Ele está te observando com olhos semicerrados de julgamento. Conclua uma tarefa." },
+    grumpy:  { border: "rgba(255,124,61,0.45)", bg: "rgba(255,124,61,0.07)",  titleColor: "var(--orange)",  title: "CHEWIE ESTÁ MAL-HUMORADO ⚠️", text: "Ele derrubou sua caneca de café de propósito. Mais um adiamento e os tentáculos aparecem." },
+    monster: { border: "rgba(224,64,251,0.5)",  bg: "rgba(224,64,251,0.07)",  titleColor: "var(--magenta)", title: "👹 MODO MONSTRO ATIVADO", text: "SEU GATO VIROU UM MONSTRO. ELE ESTÁ DESTRUINDO SEU WORKSPACE. CONCLUA UMA TAREFA AGORA.", pulse: true },
   };
 
-  const v = variants[moodKey] ?? variants.calmo;
+  const v = variants[moodKey];
 
   return (
     <div style={{
@@ -1423,39 +845,35 @@ function WarnCard({ moodKey, lives }: WarnCardProps) {
         {v.title}
       </h3>
       <p style={{ fontSize: 13, lineHeight: 1.7 }}>{v.text}</p>
-      {lives <= 3 && (
-        <p style={{
-          marginTop: 10, fontSize: 12,
-          color: lives === 1 ? "#ff3d6b" : "var(--orange)",
-          fontFamily: "'JetBrains Mono',monospace",
-          animation: lives === 1 ? "blink 0.8s ease-in-out infinite" : undefined,
-        }}>
-          ⚠ {lives === 1 ? "ÚLTIMA VIDA — conclua 3 tarefas seguidas para ganhar mais!" : `${lives} vidas restantes — conclua tarefas para recuperar!`}
-        </p>
-      )}
     </div>
   );
 }
 
-/* ─── Breaking News ─── */
-function BreakingNews({ message, onClose }: BreakingNewsProps) {
+/* ─── Breaking News (notificações SSE) ─── */
+function BreakingNews({ message, danger, onClose }: BreakingNewsProps) {
   return (
     <div style={{
       position: "fixed", top: 20, right: 20, zIndex: 9998,
-      background: "#fffbe6", color: "#d7263d",
-      border: "2px solid #d7263d", borderRadius: 12,
-      padding: "12px 16px", maxWidth: 300,
-      boxShadow: "0 4px 20px rgba(0,0,0,0.25)",
+      background: danger ? "#1a0008" : "#fffbe6",
+      color: danger ? "#ff7c7c" : "#d7263d",
+      border: `2px solid ${danger ? "#ff3d6b" : "#d7263d"}`,
+      borderRadius: 12,
+      padding: "12px 16px", maxWidth: 320,
+      boxShadow: danger
+        ? "0 0 40px rgba(255,61,107,0.5), 0 4px 20px rgba(0,0,0,0.4)"
+        : "0 4px 20px rgba(0,0,0,0.25)",
       fontWeight: 700, fontSize: 13,
-      animation: "newsIn 0.5s ease",
+      animation: danger ? "newsIn 0.5s ease, pulse 1.2s ease-in-out infinite 0.5s" : "newsIn 0.5s ease",
       display: "flex", alignItems: "flex-start", gap: 8,
     }}>
-      <span>🚨</span>
-      <span style={{ flex: 1 }}><strong>Breaking News:</strong> {message}</span>
+      <span>{danger ? "🐙" : "🚨"}</span>
+      <span style={{ flex: 1 }}>
+        <strong>{danger ? "ALERTA — Chewie em fúria:" : "Breaking News:"}</strong> {message}
+      </span>
       <button
         onClick={onClose}
         aria-label="fechar notificação"
-        style={{ background: "none", border: "none", color: "#d7263d", fontSize: 16, cursor: "pointer", lineHeight: 1, flexShrink: 0 }}
+        style={{ background: "none", border: "none", color: "inherit", fontSize: 16, cursor: "pointer", lineHeight: 1, flexShrink: 0 }}
       >×</button>
     </div>
   );
@@ -1487,8 +905,8 @@ function Background({ mood }: BackgroundProps) {
   );
 }
 
-/* ─── AiNudge — Gemini incentivadora de procrastinação ─── */
-function AiNudge({ message, loading, onClose }: AiNudgeProps) {
+/* ─── Bolha da desculpa (Gemini) exibida ao criar tarefa ─── */
+function ExcuseBubble({ message, loading, onClose }: ExcuseBubbleProps) {
   return (
     <div style={{
       position: "fixed", bottom: 24, left: 24, zIndex: 9992,
@@ -1504,20 +922,17 @@ function AiNudge({ message, loading, onClose }: AiNudgeProps) {
         <span style={{ fontSize: 20 }}>✨</span>
         <span style={{
           fontFamily: "'JetBrains Mono',monospace",
-          fontSize: 10, color: "var(--purple-l)", letterSpacing: 2,
-          flex: 1,
+          fontSize: 10, color: "var(--purple-l)", letterSpacing: 2, flex: 1,
         }}>GEMINI PROCRASTINUS</span>
         <button
           onClick={e => { e.stopPropagation(); onClose(); }}
-          aria-label="fechar sugestão da IA"
+          aria-label="fechar desculpa"
           style={{
-            flexShrink: 0,
-            width: 28, height: 28,
+            flexShrink: 0, width: 28, height: 28,
             display: "flex", alignItems: "center", justifyContent: "center",
             background: "rgba(255,255,255,0.07)",
             border: "1px solid rgba(255,255,255,0.12)",
-            borderRadius: 8,
-            color: "#fff", fontSize: 16, cursor: "pointer", lineHeight: 1,
+            borderRadius: 8, color: "#fff", fontSize: 16, cursor: "pointer", lineHeight: 1,
           }}
         >×</button>
       </div>
@@ -1540,66 +955,29 @@ function AiNudge({ message, loading, onClose }: AiNudgeProps) {
       )}
 
       <p style={{ fontSize: 10, color: "var(--dim)", marginTop: 10, fontFamily: "'JetBrains Mono',monospace" }}>
-        — Gemini 2.0 Flash
+        — Sua desculpa de procrastinação, cortesia do Gemini
       </p>
     </div>
   );
 }
 
-const NUDGE_PROMPTS = [
-  "você já trabalhou bastante hoje. que tal uma pausa de 40 minutos pra reorganizar as ideias (e a geladeira)?",
-  "essa tarefa claramente precisa de mais pesquisa antes de começar. pelo menos mais uns 3 dias de pesquisa.",
-  "estudos mostram que trabalhar cansado reduz produtividade em 73%. e você não parece descansado. descanse.",
-  "você merece assistir só mais um episódio. a tarefa vai continuar aqui, ela não tem pra onde ir.",
-  "começar amanhã com energia total é 47% mais eficiente do que terminar hoje pela metade. ciência.",
-  "o universo está alinhado para você procrastinar agora. é literalmente cósmico e irrecusável.",
-  "essa tarefa vai ser muito mais fácil depois que você comer alguma coisa. e depois de um café. e um soninho.",
-  "você tem certeza que essa tarefa é realmente importante? parece mais uma sugestão do que uma obrigação.",
-  "a criatividade floresce no descanso. relaxa um pouco e ela vai surgir. talvez amanhã. provavelmente amanhã.",
-  "git stash existe por uma razão. guarda essa tarefa lá e volta quando tiver vontade. ou nunca. sem julgamentos.",
-  "um dev descansado é um dev produtivo. e você claramente precisa de mais descanso do que está tendo.",
-  "abrir o VS Code não conta como trabalhar. feche e tente novamente amanhã com mais intenção.",
-];
-
-const AMBIENT_NEWS = [
-  "Chewie verificou seu GitHub. Nada novo. Assim como ontem. E antes de ontem. 🐱",
-  "O deploy ainda está pendente. Chewie anotou e voltou a dormir. 😴",
-  "Alguém no mundo acabou de fazer um commit. Não foi você. Chewie viu. 👀",
-  "A tarefa mais antiga do seu backlog completou mais um aniversário. Parabéns a ela. 🎂",
-  "Chewie inspecionou a lista de tarefas. Saiu sem comentários. 🔍",
-  "Breaking: dev local recusa-se a fazer deploy em sexta-feira. Chewie aprova. 🚫",
-  "Chewie tentou revisar o pull request por você. Não tem acesso. Ainda bem. 😤",
-  "Seu README ainda tem um TODO sem data. Chewie está esperando. Pacientemente. 📝",
-  "Commit message 'fix final final v3 REAL': detectado no histórico. Chewie chora. 😢",
-  "Nenhuma tarefa foi concluída no último período. Chewie registrou no changelog do caos. 📋",
-];
-
 /* ═══════════════════════════════════════════════════════
    APP
 ═══════════════════════════════════════════════════════ */
 export default function App() {
-  const [bars, setBars]           = useState<Bars>({ commits: 62, procrast: 48, humor: 75 });
-  const [tasks, setTasks]         = useState<Task[]>(INITIAL_TASKS);
-  const [lives, setLives]         = useState(MAX_LIVES);
-  const [comboCount, setComboCount] = useState(0);          // tarefas concluídas seguidas sem adiar
-  const [news, setNews]           = useState<string | null>(null);
-  const [shake, setShake]         = useState(false);
-  const [chaosModal, setChaosModal] = useState<{ id: number; text: string } | null>(null);
-  const [aiNudge, setAiNudge]           = useState<{ message: string; loading: boolean } | null>(null);
-  const [deadlineAlert, setDeadlineAlert] = useState<Task | null>(null);
-  const nudgeTimerRef                     = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const firedAlertsRef                    = useRef<Set<number>>(new Set());   // ids já alertados (15min)
-  const firedEatenRef                     = useRef<Set<number>>(new Set());   // ids já comidos
-  // rastreia se procrastinação já passou de 90 para não perder vida múltiplas vezes
-  const procrastPeakFiredRef              = useRef(false);
+  const [tasks, setTasks]   = useState<Task[]>([]);
+  const [cat, setCat]       = useState<CatState | null>(null);
+  const [news, setNews]     = useState<{ message: string; danger: boolean } | null>(null);
+  const [shake, setShake]   = useState(false);
+  const [excuse, setExcuse] = useState<{ message: string; loading: boolean } | null>(null);
+  const [backendDown, setBackendDown] = useState(false);
 
-  const mood    = getMoodData(bars.commits, bars.procrast, bars.humor);
-  const isDead  = lives <= 0;
+  const mood = getMoodData(cat?.mood ?? "neutral");
 
   /* ── utilitários ── */
-  const showNews = useCallback((msg: string) => {
-    setNews(msg);
-    setTimeout(() => setNews(null), 4500);
+  const showNews = useCallback((message: string, danger = false) => {
+    setNews({ message, danger });
+    setTimeout(() => setNews(null), danger ? 7000 : 4500);
   }, []);
 
   const triggerShake = useCallback(() => {
@@ -1607,265 +985,157 @@ export default function App() {
     setTimeout(() => setShake(false), 500);
   }, []);
 
-  const loseLife = useCallback((reason: keyof typeof LIFE_LOSS_EVENTS) => {
-    setLives(prev => Math.max(0, prev - 1));
-    showNews(pickRandom(LIFE_LOSS_EVENTS[reason].msgs));
-    triggerShake();
-  }, [showNews, triggerShake]);
-
-  const gainLife = useCallback((reason: keyof typeof LIFE_GAIN_EVENTS) => {
-    setLives(prev => {
-      const next = Math.min(MAX_LIVES, prev + 1);
-      if (next > prev) showNews(pickRandom(LIFE_GAIN_EVENTS[reason].msgs));
-      return next;
-    });
-  }, [showNews]);
-
-  /* ── detecta pico de procrastinação ── */
-  useEffect(() => {
-    if (bars.procrast >= 90 && !procrastPeakFiredRef.current && !isDead) {
-      procrastPeakFiredRef.current = true;
-      loseLife("procrastPeak");
-    }
-    if (bars.procrast < 90) {
-      procrastPeakFiredRef.current = false;
-    }
-  }, [bars.procrast, isDead, loseLife]);
-
-  /* ── tick de deadline a cada 30s ── */
-  useEffect(() => {
-    const tick = () => {
-      if (isDead) return;
-
-      // 1. coleta quais tarefas precisam de ação (sem setState aninhado)
-      const toAlert: Task[] = [];
-      const toEat:   Task[] = [];
-
-      setTasks(prev => {
-        prev.forEach(task => {
-          if (task.done || task.eaten || !task.endAt) return;
-          const mins = minsUntil(task.endAt);
-          if (mins <= 15 && mins > 0 && !firedAlertsRef.current.has(task.id)) {
-            toAlert.push(task);
-          }
-          if (mins <= 0 && !firedEatenRef.current.has(task.id)) {
-            toEat.push(task);
-          }
-        });
-
-        if (toAlert.length === 0 && toEat.length === 0) return prev;
-
-        toAlert.forEach(t => firedAlertsRef.current.add(t.id));
-        toEat.forEach(t   => firedEatenRef.current.add(t.id));
-
-        return prev.map(task => {
-          if (toEat.some(t => t.id === task.id)) return { ...task, eaten: true };
-          return task;
-        });
-      });
-
-      // 2. aplica efeitos colaterais depois do setTasks
-      if (toAlert.length > 0) setDeadlineAlert(toAlert[toAlert.length - 1]);
-
-      toEat.forEach(task => {
-        setDeadlineAlert(task);
-        showNews(pickRandom(DEADLINE_EATEN_MSGS).replace("{task}", task.text));
-        setLives(l => Math.max(0, l - 1));
-        triggerShake();
-        setBars(b => ({
-          commits:  clamp(b.commits - 15),
-          procrast: clamp(b.procrast + 18),
-          humor:    clamp(b.humor - 15),
-        }));
-      });
-    };
-
-    tick(); // roda imediatamente na montagem
-    const id = setInterval(tick, 30_000);
-    return () => clearInterval(id);
-  }, [isDead, showNews, triggerShake]);
-
-  /* ── handlers de tarefa ── */
-  const handleComplete = useCallback((taskId?: number) => {
-    setBars(b => ({
-      commits:  clamp(b.commits + 12),
-      procrast: clamp(b.procrast - 18),
-      humor:    clamp(b.humor + 14),
-    }));
-    setComboCount(prev => {
-      const next = prev + 1;
-      if (next >= 3) { gainLife("combo3"); return 0; }
-      return next;
-    });
-    showNews("Chewie ficou mais feliz com seu progresso! 🎉");
-    // limpa alerta se for a tarefa que estava alertando
-    if (taskId !== undefined) {
-      setDeadlineAlert(prev => prev?.id === taskId ? null : prev);
-    }
-  }, [showNews, gainLife]);
-
-  const handleRequestDefer = useCallback((id: number, text: string) => {
-    setChaosModal({ id, text });
-  }, []);
-
-  const handleConfirmDefer = useCallback(() => {
-    if (!chaosModal) return;
-    const { id } = chaosModal;
-
-    setTasks(prev => {
-      const updated = prev.map(t => t.id === id ? { ...t, defers: t.defers + 1 } : t);
-      // perde vida se a mesma tarefa atingir 5 adiamentos
-      const target = updated.find(t => t.id === id);
-      if (target && target.defers >= 5) loseLife("deferSpree");
-      return updated;
-    });
-
-    setBars(b => ({
-      commits:  b.commits,
-      procrast: clamp(b.procrast + 14),
-      humor:    clamp(b.humor - 13),
-    }));
-    setComboCount(0); // quebra o combo
-    triggerShake();
-    showNews(pickRandom(NEWS_POOL));
-    setChaosModal(null);
-  }, [chaosModal, triggerShake, showNews, loseLife]);
-
-  const handleCancelDefer = useCallback(() => {
-    setChaosModal(null);
-  }, []);
-
-  const handleAbandon = useCallback(() => {
-    setBars(b => ({
-      commits:  clamp(b.commits - 22),
-      procrast: clamp(b.procrast + 24),
-      humor:    clamp(b.humor - 22),
-    }));
-    setComboCount(0); // quebra o combo
-    loseLife("abandon");
-  }, [loseLife]);
-
-  /* ── ações da caixinha de reciclagem ── */
-  const handleRestoreEaten = useCallback((id: number) => {
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, eaten: false } : t));
-    firedEatenRef.current.delete(id);
-  }, []);
-
-  const handleCompleteEaten = useCallback((id: number) => {
-    let taskText = "";
-    setTasks(prev => {
-      taskText = prev.find(t => t.id === id)?.text ?? "";
-      return prev.map(t => t.id === id ? { ...t, eaten: false, done: true } : t);
-    });
-    firedEatenRef.current.delete(id);
-    gainLife("combo3");
-    // use setTimeout to read taskText after setTasks has been called
-    setTimeout(() => {
-      showNews(pickRandom(RECYCLED_COMPLETE_MSGS).replace("{task}", taskText));
-    }, 0);
-    setBars(b => ({
-      commits:  clamp(b.commits + 15),
-      procrast: clamp(b.procrast - 20),
-      humor:    clamp(b.humor + 18),
-    }));
-  }, [gainLife, showNews]);
-
-  /* ── nova partida ── */
-  const handleRevive = useCallback(() => {
-    setBars({ commits: 62, procrast: 48, humor: 75 });
-    setTasks(INITIAL_TASKS.map(t => ({ ...t, eaten: false })));
-    setLives(MAX_LIVES);
-    setComboCount(0);
-    procrastPeakFiredRef.current = false;
-    firedAlertsRef.current.clear();
-    firedEatenRef.current.clear();
-    setDeadlineAlert(null);
-  }, []);
-
-  /* timer de breaking news aleatório (60–120s) */
-  const newsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    const scheduleNews = () => {
-      const delay = 60_000 + Math.random() * 60_000; // 60–120s
-      newsTimerRef.current = setTimeout(() => {
-        if (!isDead) showNews(pickRandom(AMBIENT_NEWS));
-        scheduleNews();
-      }, delay);
-    };
-    scheduleNews();
-    return () => { if (newsTimerRef.current) clearTimeout(newsTimerRef.current); };
-  }, [isDead, showNews]);
-
-  const fetchAiNudge = useCallback(async () => {
-    if (isDead) return;
-    setAiNudge({ message: "", loading: true });
+  /** Recarrega o estado do gato (recalculado pelo backend após cada ação). */
+  const refreshCat = useCallback(async () => {
     try {
-      // chama a camada de IA (backend em prod; Gemini direto só em dev) — ver src/api/ai.ts
-      const text = await fetchProcrastinationNudge();
-      setAiNudge({ message: text, loading: false });
+      const data = await getCat();
+      setCat(data);
     } catch {
-      const fallback = NUDGE_PROMPTS[Math.floor(Math.random() * NUDGE_PROMPTS.length)];
-      setAiNudge({ message: fallback, loading: false });
+      /* mantém o último estado conhecido */
     }
-  }, [isDead]);
-
-  const dismissNudge = useCallback(() => {
-    setAiNudge(null);
-    // cancela o timer atual para reiniciar o ciclo do zero
-    if (nudgeTimerRef.current) clearTimeout(nudgeTimerRef.current);
-    nudgeTimerRef.current = null;
   }, []);
 
+  /* ── carga inicial: tarefas + gato ── */
   useEffect(() => {
     let cancelled = false;
+    (async () => {
+      try {
+        const [t, c] = await Promise.all([listTasks(), getCat()]);
+        if (cancelled) return;
+        setTasks(t);
+        setCat(c);
+        setBackendDown(false);
+      } catch {
+        if (!cancelled) setBackendDown(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
-    const schedule = () => {
-      const delay = 25_000 + Math.random() * 20_000; // 25–45s
-      nudgeTimerRef.current = setTimeout(() => {
-        if (!cancelled) {
-          fetchAiNudge();
-          schedule();
+  /* ── notificações iniciais + stream SSE ── */
+  useEffect(() => {
+    let cancelled = false;
+    listNotifications()
+      .then(list => {
+        if (cancelled) return;
+        const unread = list.filter(n => !n.is_read);
+        if (unread.length > 0) {
+          const last = unread[unread.length - 1];
+          showNews(last.message, last.category === "cat_destruction");
         }
-      }, delay);
-    };
+      })
+      .catch(() => { /* silencioso */ });
 
-    schedule();
+    const source = openNotificationStream();
+    source.onmessage = (event) => {
+      try {
+        const notification = JSON.parse(event.data);
+        const danger = notification.category === "cat_destruction";
+        showNews(notification.message, danger);
+        if (danger) triggerShake();
+      } catch {
+        /* payload inválido — ignora */
+      }
+    };
+    source.onerror = () => { /* o EventSource tenta reconectar sozinho */ };
+
     return () => {
       cancelled = true;
-      if (nudgeTimerRef.current) clearTimeout(nudgeTimerRef.current);
+      source.close();
     };
-  }, [fetchAiNudge]);
+  }, [showNews, triggerShake]);
 
-  /* ── CSS e CSS variable ── */
+  /* ── criar tarefa ── */
+  const handleCreate = useCallback(async (nome: string, dataTermino: string) => {
+    setExcuse({ message: "", loading: true });
+    try {
+      const res = await createTask(nome, dataTermino);
+      setTasks(prev => [...prev, res.task]);
+      setExcuse({ message: res.excuse, loading: false });
+      // 🔊 a trilha do Chewie começa a tocar ao criar a tarefa
+      window.dispatchEvent(new CustomEvent(PLAY_MUSIC_EVENT));
+      await refreshCat();
+    } catch (err) {
+      setExcuse(null);
+      showNews("Não consegui criar a tarefa — o backend respondeu com erro. 😿", true);
+      throw err;
+    }
+  }, [refreshCat, showNews]);
+
+  /* ── concluir ── */
+  const handleComplete = useCallback(async (id: string) => {
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, concluida: true } : t));
+    try {
+      await patchTask(id, { concluida: true });
+      showNews("Tarefa concluída! Chewie está orgulhoso (e surpreso). 🎉");
+      await refreshCat();
+    } catch {
+      // rollback
+      setTasks(prev => prev.map(t => t.id === id ? { ...t, concluida: false } : t));
+      showNews("Falha ao concluir a tarefa no servidor. 😿", true);
+    }
+  }, [refreshCat, showNews]);
+
+  /* ── adiar 1 dia ── */
+  const handleDefer = useCallback(async (task: Task) => {
+    const newDate = addDaysIso(task.data_termino, 1);
+    const newCount = task.vezes_adiada + 1;
+    setTasks(prev => prev.map(t => t.id === task.id ? { ...t, data_termino: newDate, vezes_adiada: newCount } : t));
+    triggerShake();
+    try {
+      await patchTask(task.id, { data_termino: newDate, vezes_adiada: newCount });
+      showNews("Tarefa adiada em 1 dia. Chewie anotou no changelog do caos. 🗒️");
+      await refreshCat();
+    } catch {
+      // rollback
+      setTasks(prev => prev.map(t => t.id === task.id ? { ...t, data_termino: task.data_termino, vezes_adiada: task.vezes_adiada } : t));
+      showNews("Falha ao adiar a tarefa no servidor. 😿", true);
+    }
+  }, [refreshCat, showNews, triggerShake]);
+
+  /* ── desistir ── */
+  const handleAbandon = useCallback(async (id: string) => {
+    const prevTasks = tasks;
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, desistiu: true } : t));
+    try {
+      await patchTask(id, { desistiu: true });
+      showNews("Você desistiu da tarefa. Chewie arquivou nos anais da preguiça. 💔");
+      await refreshCat();
+    } catch {
+      setTasks(prevTasks); // rollback
+      showNews("Falha ao desistir da tarefa no servidor. 😿", true);
+    }
+  }, [tasks, refreshCat, showNews]);
+
+  /* ── CSS global + accent ── */
   useEffect(() => {
     const el = document.createElement("style");
     el.textContent = GLOBAL_CSS;
     document.head.appendChild(el);
-    return () => {
-      document.head.removeChild(el);
-    };
+    return () => { document.head.removeChild(el); };
   }, []);
 
   useEffect(() => {
     document.documentElement.style.setProperty("--accent", mood.accent);
   }, [mood.accent]);
 
-  const pending = tasks.filter(t => !t.done && !t.eaten).length;
+  const pending = tasks.filter(t => !t.concluida && !t.desistiu).length;
+  const visibleTotal = tasks.filter(t => !t.desistiu).length;
 
   return (
     <div style={{ position: "relative", minHeight: "100vh" }}>
       <Background mood={mood} />
 
-      {/* tela de morte — sobrepõe tudo */}
-      {isDead && <DeathScreen onRevive={handleRevive} />}
-
-      {chaosModal && !isDead && (
-        <ChaosModal
-          taskText={chaosModal.text}
-          onConfirm={handleConfirmDefer}
-          onCancel={handleCancelDefer}
-        />
+      {backendDown && (
+        <div style={{
+          position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999,
+          background: "#1a0008", color: "#ff7c7c",
+          borderBottom: "1px solid rgba(255,61,107,0.5)",
+          fontFamily: "'JetBrains Mono',monospace", fontSize: 12,
+          padding: "10px 16px", textAlign: "center",
+        }}>
+          ⚠ Backend não encontrado em <strong>localhost:8000</strong> — suba o servidor e recarregue a página.
+        </div>
       )}
 
       <div style={{
@@ -1886,29 +1156,18 @@ export default function App() {
             letterSpacing: "0.5px",
           }}>
             Chewie
-            <span style={{ color: "var(--magenta)", WebkitTextFillColor: "var(--magenta)", textShadow: "0 0 14px var(--magenta), 0 0 28px rgba(224,64,251,0.5)" }}>,</span>
-            <span style={{ color: "#c49aff", WebkitTextFillColor: "#c49aff", textShadow: "0 0 14px rgba(196,154,255,0.8)" }}> The Cat</span>
+            <span style={{ color: "var(--magenta)", textShadow: "0 0 14px var(--magenta), 0 0 28px rgba(224,64,251,0.5)" }}>,</span>
+            <span style={{ color: "#c49aff", textShadow: "0 0 14px rgba(196,154,255,0.8)" }}> The Cat</span>
           </h1>
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            {comboCount > 0 && (
-              <span style={{
-                border: "1px solid rgba(31,255,168,0.5)", borderRadius: 999,
-                padding: "7px 14px", fontSize: 12,
-                background: "rgba(31,255,168,0.08)", backdropFilter: "blur(10px)",
-                color: "var(--green)", fontFamily: "'JetBrains Mono',monospace",
-                animation: "pulse 1s ease-in-out infinite",
-              }}>
-                🔥 combo {comboCount}/3
-              </span>
-            )}
             <span style={{
               border: "1px solid var(--border)", borderRadius: 999,
               padding: "7px 14px", fontSize: 12,
               background: "var(--glass)", backdropFilter: "blur(10px)",
               fontFamily: "'JetBrains Mono',monospace",
             }}>
-              📋 {pending}/{tasks.length}
+              📋 {pending}/{visibleTotal}
             </span>
             <span style={{
               border: `1px solid ${mood.accent}66`, borderRadius: 999,
@@ -1917,11 +1176,7 @@ export default function App() {
               color: mood.accent, fontFamily: "'JetBrains Mono',monospace",
               transition: "color 0.4s, border-color 0.4s",
             }}>
-              {mood.key === "happy"            ? "😻 feliz"     :
-               mood.key === "calmo"            ? "😸 calmo"     :
-               mood.key === "ficando_bravo"    ? "😠 irritando" :
-               mood.key === "irritado"         ? "😾 irritado"  :
-               mood.key === "fora_de_controle" ? "🐙 caos"      : "💀 quebrado"}
+              {mood.emoji} {mood.key}
             </span>
           </div>
         </header>
@@ -1932,42 +1187,36 @@ export default function App() {
           gap: "clamp(12px,2.5vw,22px)",
           alignItems: "start",
         }}>
-          <PetCard mood={mood} bars={bars} animShake={shake} lives={lives} />
+          <PetCard mood={mood} cat={cat} animShake={shake} />
 
           <div style={{ display: "flex", flexDirection: "column", gap: "clamp(12px,2.5vw,20px)" }}>
             <TaskCard
               tasks={tasks}
-              setTasks={setTasks}
-              onComplete={id => handleComplete(id)}
-              onRequestDefer={handleRequestDefer}
+              pending={pending}
+              onCreate={handleCreate}
+              onComplete={handleComplete}
+              onDefer={handleDefer}
               onAbandon={handleAbandon}
             />
-            <RecycleBin
-              tasks={tasks}
-              onRestore={handleRestoreEaten}
-              onCompleteEaten={handleCompleteEaten}
-            />
             <DeferredTable tasks={tasks} />
-            <WarnCard moodKey={mood.key} lives={lives} />
-            <SpotifyCard
-              pulsing={tasks.filter(t => !t.done && !t.eaten).length >= 3}
-            />
+            <WarnCard moodKey={mood.key} />
+            <SpotifyCard pulsing={pending >= 3} />
           </div>
         </div>
       </div>
 
-      {news && <BreakingNews message={news} onClose={() => setNews(null)} />}
-      {deadlineAlert && !isDead && (
-        <DeadlineAlert
-          task={deadlineAlert}
-          onClose={() => setDeadlineAlert(null)}
+      {news && (
+        <BreakingNews
+          message={news.message}
+          danger={news.danger}
+          onClose={() => setNews(null)}
         />
       )}
-      {aiNudge && !isDead && (
-        <AiNudge
-          message={aiNudge.message}
-          loading={aiNudge.loading}
-          onClose={dismissNudge}
+      {excuse && (
+        <ExcuseBubble
+          message={excuse.message}
+          loading={excuse.loading}
+          onClose={() => setExcuse(null)}
         />
       )}
     </div>
