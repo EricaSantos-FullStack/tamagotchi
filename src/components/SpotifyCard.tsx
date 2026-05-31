@@ -118,15 +118,46 @@ export function SpotifyCard({ pulsing = false }: SpotifyCardProps) {
     return () => window.removeEventListener(PLAY_MUSIC_EVENT, onPlayRequest);
   }, []);
 
+  // estilos inline no mesmo padrão dos outros cards do app (o App.css não é
+  // carregado por este App.tsx, então o visual vive aqui).
   return (
     <section
-      className={`card spotify-card${pulsing ? " pulsing" : ""}`}
       aria-label="Trilha sonora do Chewie"
+      style={{
+        background: "var(--glass)",
+        border: pulsing ? "1px solid var(--accent)" : "1px solid var(--border)",
+        borderRadius: 22,
+        padding: "clamp(16px,3vw,24px)",
+        backdropFilter: "blur(18px)",
+        boxShadow: pulsing
+          ? "0 18px 50px rgba(0,0,0,0.45), 0 0 38px rgba(155,80,255,0.45)"
+          : "0 18px 50px rgba(0,0,0,0.45)",
+        transition: "box-shadow 0.3s, border-color 0.3s",
+      }}
     >
-      <h3>🎵 trilha da procrastinação</h3>
-      <p className="spotify-subtitle">música pra fingir que tá trabalhando</p>
+      <h3
+        style={{
+          fontFamily: "'Press Start 2P',monospace",
+          fontSize: "clamp(10px,2vw,13px)",
+          fontWeight: 700,
+          color: pulsing ? "var(--accent)" : "#fff",
+          marginBottom: 8,
+        }}
+      >
+        🎵 trilha da procrastinação
+      </h3>
+      <p
+        style={{
+          color: "var(--dim)",
+          fontSize: 13,
+          fontStyle: "italic",
+          marginBottom: 14,
+        }}
+      >
+        música pra fingir que tá trabalhando
+      </p>
       {/* a Spotify IFrame API substitui esta div pelo player de verdade */}
-      <div className="spotify-embed">
+      <div style={{ borderRadius: 12, overflow: "hidden", minHeight: 352 }}>
         <div ref={embedRef} />
       </div>
     </section>

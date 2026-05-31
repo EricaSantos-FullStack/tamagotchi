@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { CHEWIE_IMGS } from "./assets/images";
+import { SpotifyCard, PLAY_MUSIC_EVENT } from "./components/SpotifyCard";
 
 /* ═══════════════════════════════════════════════════════
    TIPOS
@@ -941,6 +942,8 @@ function TaskCard({ tasks, setTasks, onComplete, onRequestDefer, onAbandon }: Ta
     setNewEndDate("");
     setNewEndTime("");
     setExpanded(false);
+    // 🔊 ao criar a tarefa, a trilha do Chewie começa a tocar sozinha
+    window.dispatchEvent(new CustomEvent(PLAY_MUSIC_EVENT));
   }, [newText, newEndDate, newEndTime, setTasks]);
 
   const handleComplete = useCallback((id: number) => {
@@ -1960,6 +1963,9 @@ export default function App() {
             />
             <DeferredTable tasks={tasks} />
             <WarnCard moodKey={mood.key} lives={lives} />
+            <SpotifyCard
+              pulsing={tasks.filter(t => !t.done && !t.eaten).length >= 3}
+            />
           </div>
         </div>
       </div>
