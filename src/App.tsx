@@ -496,8 +496,8 @@ function TaskCard({ tasks, pending, onCreate, onComplete, onDefer, onAbandon }: 
     }
   }, [newText, newEndDate, newEndTime, saving, onCreate]);
 
-  // tarefas visíveis: quem desistiu some; concluídas ficam (riscadas)
-  const visible = tasks.filter(t => !t.desistiu);
+  // tarefas visíveis: some quem desistiu E quem concluiu (só pendentes ficam na lista)
+  const visible = tasks.filter(t => !t.desistiu && !t.concluida);
 
   return (
     <section style={{
