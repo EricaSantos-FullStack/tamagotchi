@@ -4,6 +4,7 @@ import { TaskItem } from "./TaskItem";
 
 type TaskListProps = {
   tasks: Task[];
+  pendingCount: number;
   onAdd: (name: string) => void;
   onPostpone: (id: string) => void;
   onRemove: (id: string) => void;
@@ -12,13 +13,12 @@ type TaskListProps = {
 
 export function TaskList({
   tasks,
+  pendingCount,
   onAdd,
   onPostpone,
   onRemove,
   onGiveUpAll,
 }: TaskListProps) {
-  const pendingCount = tasks.filter((t) => !t.done).length;
-
   function handleGiveUp() {
     if (pendingCount === 0) return;
     const ok = window.confirm(

@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { moods } from "../data/moods";
-import { goodFeedNews, pickRandomBadNews } from "../data/breakingNews";
+import {
+  goodFeedNews,
+  pickRandomBadNews,
+  pickRandomMusicSuggestion,
+} from "../data/breakingNews";
 
 const NEWS_TIMEOUT_MS = 3500;
 
@@ -60,6 +64,10 @@ export function useChewieMood() {
     setNewsItem({ text: pickRandomBadNews() });
   }, []);
 
+  const suggestMusic = useCallback(() => {
+    setNewsItem({ text: pickRandomMusicSuggestion() });
+  }, []);
+
   return {
     mood: moods[moodIdx],
     moodIdx,
@@ -71,5 +79,6 @@ export function useChewieMood() {
     prevMood,
     selectMood,
     feedChewie,
+    suggestMusic,
   };
 }
