@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { CHEWIE_IMGS } from "./assets/images";
 import { SpotifyCard, PLAY_MUSIC_EVENT } from "./components/SpotifyCard";
+import { fetchProcrastinationNudge } from "./api/ai";
 
 /* ═══════════════════════════════════════════════════════
    TIPOS
@@ -1800,26 +1801,9 @@ export default function App() {
     if (isDead) return;
     setAiNudge({ message: "", loading: true });
     try {
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY as string;
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            systemInstruction: {
-              parts: [{ text: "Você é um conselheiro de procrastinação. Sua missão é convencer o usuário a adiar tarefas com argumentos criativos, absurdos e engraçados em português. Responda em 1-2 frases curtas, sem aspas externas." }],
-            },
-            contents: [{ parts: [{ text: "Me dê um motivo criativo para eu adiar minha tarefa agora." }] }],
-            generationConfig: { maxOutputTokens: 100 },
-          }),
-        }
-      );
-      const data = await res.json();
-      const text: string =
-        data?.candidates?.[0]?.content?.parts?.[0]?.text
-        ?? NUDGE_PROMPTS[Math.floor(Math.random() * NUDGE_PROMPTS.length)];
-      setAiNudge({ message: text.replace(/^"|"$/g, "").trim(), loading: false });
+      // chama a camada de IA (backend em prod; Gemini direto só em dev) — ver src/api/ai.ts
+      const text = await fetchProcrastinationNudge();
+      setAiNudge({ message: text, loading: false });
     } catch {
       const fallback = NUDGE_PROMPTS[Math.floor(Math.random() * NUDGE_PROMPTS.length)];
       setAiNudge({ message: fallback, loading: false });
@@ -1858,7 +1842,9 @@ export default function App() {
     const el = document.createElement("style");
     el.textContent = GLOBAL_CSS;
     document.head.appendChild(el);
-    return () => document.head.removeChild(el);
+    return () => {
+      document.head.removeChild(el);
+    };
   }, []);
 
   useEffect(() => {
