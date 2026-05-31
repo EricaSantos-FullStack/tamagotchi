@@ -6,14 +6,6 @@ import App from "./App.tsx";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    {/* Fundo neon e orbs para visual glassmorphism */}
-    <>
-      <div className="bg-tint" />
-      <div className="bg-orb orb-1" />
-      <div className="bg-orb orb-2" />
-      <main className="app">
-        <App />
-      </main>
-    </>
+    <App />
   </StrictMode>,
 );
