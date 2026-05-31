@@ -2,37 +2,42 @@ import type { Task } from "../types/task";
 
 type TaskItemProps = {
   task: Task;
-  onPostpone: (id: string) => void;
-  onRemove: (id: string) => void;
+  onComplete: (id: string) => void;
+  onDefer: (id: string) => void;
+  onGiveUp: (id: string) => void;
 };
 
-export function TaskItem({ task, onPostpone, onRemove }: TaskItemProps) {
-  const showDash = !task.count;
-
+export function TaskItem({ task, onComplete, onDefer, onGiveUp }: TaskItemProps) {
   return (
-    <li className={`task${task.done ? " done" : ""}`}>
-      <span className={`checkbox${task.done ? " checked" : ""}`}>
-        {task.done ? "✓" : ""}
+    <li className={`task${task.concluida ? " done" : ""}`}>
+      <span className={`checkbox${task.concluida ? " checked" : ""}`}>
+        {task.concluida ? "✓" : ""}
       </span>
       <span className="task-name">
-        {task.name}
-        {task.count ? <em className="x"> ×{task.count}</em> : null}
-        {showDash ? <span className="task-dash"> —</span> : null}
+        {task.nome}
+        {task.vezes_adiada > 0 ? <em className="x"> ×{task.vezes_adiada}</em> : null}
       </span>
-      {!task.done && (
+      {!task.concluida && (
         <span className="task-actions">
           <button
             type="button"
+            className="btn-concluir"
+            onClick={() => onComplete(task.id)}
+          >
+            ✓ concluir
+          </button>
+          <button
+            type="button"
             className="btn-adiar"
-            onClick={() => onPostpone(task.id)}
+            onClick={() => onDefer(task.id)}
           >
             adiar
           </button>
           <button
             type="button"
             className="btn-desistir-task"
-            onClick={() => onRemove(task.id)}
-            aria-label={`desistir da tarefa: ${task.name}`}
+            onClick={() => onGiveUp(task.id)}
+            aria-label={`desistir da tarefa: ${task.nome}`}
             title="desistir desta tarefa"
           >
             🏳️

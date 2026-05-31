@@ -5,28 +5,20 @@ import { TaskItem } from "./TaskItem";
 type TaskListProps = {
   tasks: Task[];
   pendingCount: number;
-  onAdd: (name: string) => void;
-  onPostpone: (id: string) => void;
-  onRemove: (id: string) => void;
-  onGiveUpAll: () => void;
+  onAdd: (nome: string, data_termino: string) => void;
+  onComplete: (id: string) => void;
+  onDefer: (id: string) => void;
+  onGiveUp: (id: string) => void;
 };
 
 export function TaskList({
   tasks,
   pendingCount,
   onAdd,
-  onPostpone,
-  onRemove,
-  onGiveUpAll,
+  onComplete,
+  onDefer,
+  onGiveUp,
 }: TaskListProps) {
-  function handleGiveUp() {
-    if (pendingCount === 0) return;
-    const ok = window.confirm(
-      `Desistir de ${pendingCount} tarefa(s) pendente(s)? Chewie vai julgar você.`,
-    );
-    if (ok) onGiveUpAll();
-  }
-
   return (
     <section className="card tasks-card">
       <div className="tasks-head">
@@ -43,21 +35,14 @@ export function TaskList({
             <TaskItem
               key={task.id}
               task={task}
-              onPostpone={onPostpone}
-              onRemove={onRemove}
+              onComplete={onComplete}
+              onDefer={onDefer}
+              onGiveUp={onGiveUp}
             />
           ))}
         </ul>
       )}
       <NewTaskForm onAdd={onAdd} />
-      <button
-        type="button"
-        className="btn-desistir"
-        onClick={handleGiveUp}
-        disabled={pendingCount === 0}
-      >
-        🏳️ desistir
-      </button>
     </section>
   );
 }
