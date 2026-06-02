@@ -446,7 +446,8 @@ function PetCard({ mood, cat, animShake }: PetCardProps) {
       <div style={{ marginBottom: 16 }}>
         <BarRow label="FELICIDADE"  value={cat?.happiness ?? 0}        barColor="linear-gradient(90deg,#14d68a,#1fffa8)"               glowColor="#1fffa8"        textColor="var(--green)"    />
         <BarRow label="FOME"        value={cat?.hunger ?? 0}           barColor="linear-gradient(90deg,#ff6a2b,#ff7c3d)"              glowColor="#ff7c3d"        textColor="var(--orange)"   />
-        <BarRow label="DESTRUIÇÃO"  value={cat?.destruction_level ?? 0} barColor="linear-gradient(90deg,var(--purple),var(--magenta))" glowColor="var(--purple)"  textColor="var(--purple-l)" />
+        {/* destruction_level vem do backend como nível inteiro 0–5 (min(5,…)), não %. Escala ×20 → 0–100%. */}
+        <BarRow label="DESTRUIÇÃO"  value={(cat?.destruction_level ?? 0) * 20} barColor="linear-gradient(90deg,var(--purple),var(--magenta))" glowColor="var(--purple)"  textColor="var(--purple-l)" />
       </div>
 
       <blockquote style={{
